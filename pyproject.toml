@@ -17,6 +17,9 @@ dependencies = [
     "openai>=1.0.0",
 ]
 
+[tool.hatch.build.targets.wheel]
+packages = ["src/meeting_notes_ai"]
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
