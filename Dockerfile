@@ -5,12 +5,12 @@ WORKDIR /app
 # Install uv for fast deps
 RUN pip install --no-cache-dir uv
 
-# Copy dependency files and install deps
+# Copy dependency files and app source
 COPY pyproject.toml uv.lock /app/
-RUN uv sync --frozen --no-dev
-
-# Copy app
 COPY src/ /app/src/
+
+# Install all deps including the project itself
+RUN uv sync --frozen --no-dev
 
 # Non-root user
 RUN useradd --create-home --shell /bin/bash app \
