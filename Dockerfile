@@ -19,4 +19,4 @@ USER app
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "uvicorn meeting_notes_ai.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["sh", "-c", ".venv/bin/uvicorn meeting_notes_ai.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
