@@ -6,7 +6,7 @@ WORKDIR /app
 RUN pip install --no-cache-dir uv
 
 # Copy dependency files and install deps
-COPY pyproject.toml /app/
+COPY pyproject.toml uv.lock /app/
 RUN uv sync --frozen --no-dev
 
 # Copy app
