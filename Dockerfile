@@ -2,15 +2,17 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install uv for fast deps
+# Install uv for fast dependency management
 RUN pip install --no-cache-dir uv
 
-# Copy dependency files and app source
+# Copy project files
 COPY pyproject.toml uv.lock /app/
 COPY src/ /app/src/
 
-# Install all deps including the project itself
-RUN uv sync --frozen --no-dev
+# Install everything to system Python (no venv) — uvicorn goes on PATH
+RUN uv pip install --system -e . && \
+    python -c "from meeting_notes_ai.main import app; print('App import OK')" && \
+    which uvicorn && uvicorn --version
 
 # Non-root user
 RUN useradd --create-home --shell /bin/bash app \
@@ -19,4 +21,4 @@ USER app
 
 EXPOSE 8000
 
-CMD ["sh", "-c", ".venv/bin/python -m uvicorn meeting_notes_ai.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["sh", "-c", "uvicorn meeting_notes_ai.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
