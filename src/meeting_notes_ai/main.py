@@ -3,8 +3,14 @@
 from fastapi import FastAPI
 
 from meeting_notes_ai.routes import health, meetings
+from meeting_notes_ai import auth
+from meeting_notes_ai.routes import batches, teams, webhooks
 
-app = FastAPI(title="MeetingNotesAI", version="0.1.0")
+app = FastAPI(title="MeetingNotesAI", version="0.2.0")
 
 app.include_router(health.router)
 app.include_router(meetings.router)
+app.include_router(auth.router)
+app.include_router(batches.router)
+app.include_router(teams.router)
+app.include_router(webhooks.router)

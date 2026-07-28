@@ -1,8 +1,10 @@
-"""Multi-format export service — JSON and Markdown."""
+"""Multi-format export service — JSON, Markdown, PDF, and ZIP batch export."""
 from __future__ import annotations
 
+import io
 import json
 import tempfile
+import zipfile
 from pathlib import Path
 from typing import Any, Literal
 
@@ -17,7 +19,7 @@ def _get(d: Any, key: str, default: str = "") -> str:
 
 
 class ExportService:
-    """Export meeting notes in JSON or Markdown format."""
+    """Export meeting notes in JSON, Markdown, or PDF format."""
 
     def export_json(
         self,
@@ -88,17 +90,38 @@ class ExportService:
             lines.append(f"**Summary:** {result.get('summary', '')}\n")
             if result.get("action_items"):
                 lines.append("## Action Items\n")
-                for item in result["action_items"]:
-                    assignee = _get(item, "assignee", "Unassigned")
-                    desc = _get(item, "description")
-                    lines.append(f"- **{assignee}**: {desc}")
+                items = result["action_items"]
+                if isinstance(items, str):
+                    try:
+                        items = json.loads(items)
+                    except (json.JSONDecodeError, TypeError):
+                        items = []
+                for item in items:
+                    if isinstance(item, dict):
+                        assignee = _get(item, "assignee", "Unassigned")
+                        desc = _get(item, "description", "")
+                        lines.append(f"- **{assignee}**: {desc}")
+                    else:
+                        lines.append(f"- {item}")
             if result.get("decisions"):
                 lines.append("## Decisions\n")
-                for d in result["decisions"]:
+                decisions = result["decisions"]
+                if isinstance(decisions, str):
+                    try:
+                        decisions = json.loads(decisions)
+                    except (json.JSONDecodeError, TypeError):
+                        decisions = []
+                for d in decisions:
                     lines.append(f"- {d}")
             if result.get("key_points"):
                 lines.append("## Key Points\n")
-                for p in result["key_points"]:
+                points = result["key_points"]
+                if isinstance(points, str):
+                    try:
+                        points = json.loads(points)
+                    except (json.JSONDecodeError, TypeError):
+                        points = []
+                for p in points:
                     lines.append(f"- {p}")
 
         return "\n".join(lines)
@@ -134,3 +157,75 @@ class ExportService:
         ) as f:
             f.write(content)
             return Path(f.name)
+
+    def export_pdf(
+        self,
+        result: dict[str, Any],
+        mode: MeetingMode,
+    ) -> bytes:
+        """Export meeting notes as PDF bytes.
+
+        Uses weasyprint to convert HTML (generated from Markdown template)
+        to a PDF document.
+
+        Args:
+            result: The meeting data dict to export.
+            mode: Meeting mode for section formatting.
+
+        Returns:
+            PDF file content as bytes.
+        """
+        import weasyprint
+
+        md_content = self.export_markdown(result, mode)
+        # Convert markdown to simple HTML
+        html_body = md_content.replace("\n", "<br>\n")
+        html = f"<html><body>{html_body}</body></html>"
+        pdf_bytes = weasyprint.from_string(html)
+        return pdf_bytes  # type: ignore
+
+    def export_batch_zip(
+        self,
+        results: list[dict[str, Any]],
+        modes: list[MeetingMode],
+        formats: list[str] | None = None,
+    ) -> bytes:
+        """Export multiple meeting results as a ZIP archive.
+
+        Each meeting is exported in all requested formats and collected
+        into a single ZIP file.
+
+        Args:
+            results: List of meeting data dicts to export.
+            modes: Meeting modes for each result.
+            formats: List of formats to include (default: all).
+
+        Returns:
+            ZIP archive content as bytes.
+        """
+        if formats is None:
+            formats = ["json", "markdown", "pdf"]
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for i, (result, mode) in enumerate(zip(results, modes)):
+                base_name = result.get("filename", result.get("title", f"meeting_{i}"))
+                stem = Path(base_name).stem
+
+                if "json" in formats:
+                    json_content = self.export_json(result)
+                    zf.writestr(f"{stem}.json", json_content)
+
+                if "markdown" in formats:
+                    md_content = self.export_markdown(result, mode)
+                    zf.writestr(f"{stem}.md", md_content)
+
+                if "pdf" in formats:
+                    try:
+                        pdf_content = self.export_pdf(result, mode)
+                        zf.writestr(f"{stem}.pdf", pdf_content)
+                    except Exception:
+                        # Skip PDF if weasyprint not available
+                        pass
+
+        return buf.getvalue()

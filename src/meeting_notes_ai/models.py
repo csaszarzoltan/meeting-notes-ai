@@ -148,3 +148,4 @@ class LegalNote(BaseModel):
 class ExportFormat(str, Enum):
     JSON = "json"
     MARKDOWN = "markdown"
+    PDF = "pdf"
