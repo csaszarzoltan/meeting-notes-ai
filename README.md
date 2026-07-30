@@ -14,6 +14,7 @@ Micro-SaaS for meeting transcription and structured notes.
 - **Batch Processing**: Upload up to 10 audio files per batch with per-file status tracking
 - **Team Workspaces**: Multi-user teams with role-based access (admin/member/viewer)
 - **Webhook Notifications**: Automatic HTTP callbacks on batch completion with HMAC-SHA256 signing
+- **Meeting Sharing**: Generate shareable links with configurable expiration (1h, 24h, 7d, never). Revoke links or let them auto-expire. Public endpoint serves meeting summaries without authentication.
 - **JWT Authentication**: Bearer token signup/login with 24h expiry
 - **Database**: Async SQLAlchemy with Railway Postgres (Alembic-ready)
 - **SSRF Protection**: Built-in URL validation to prevent server-side request forgery
@@ -273,6 +274,84 @@ Change a member's role. Requires `admin` role.
 }
 ```
 
+### Meeting Sharing
+
+Share meeting summaries via public links with configurable expiration. All sharing endpoints require authentication (except the public view endpoint).
+
+#### POST /api/v1/meetings/{meeting_id}/share
+
+Generate a shareable link for a meeting summary. Requires `admin` or `member` role on the meeting's team (viewers cannot share).
+
+**Request body** (JSON):
+```json
+{
+  "expires_in": "24h"
+}
+```
+
+| `expires_in` | Behaviour |
+|--------------|-----------|
+| `"1h"`       | Link expires in 1 hour |
+| `"24h"`      | Link expires in 24 hours |
+| `"7d"`       | Link expires in 7 days |
+| `"never"`    | No expiration (permanent) |
+| *(omitted)*  | Defaults to no expiration |
+
+**Response** (201):
+```json
+{
+  "id": "uuid",
+  "token": "base64-urlsafe-token",
+  "url": "/public/shares/{token}",
+  "expires_at": "2026-07-31T12:00:00Z",
+  "is_active": true,
+  "created_at": "2026-07-30T12:00:00Z"
+}
+```
+
+#### GET /api/v1/meetings/{meeting_id}/shares
+
+List active (non-revoked) share links for a meeting. Requires authentication and access to the meeting.
+
+**Response** (200):
+```json
+{
+  "shares": [
+    {
+      "id": "uuid",
+      "token": "base64-urlsafe-token",
+      "url": "/public/shares/{token}",
+      "expires_at": "2026-07-31T12:00:00Z",
+      "is_active": true,
+      "created_at": "2026-07-30T12:00:00Z"
+    }
+  ]
+}
+```
+
+#### DELETE /api/v1/meetings/{meeting_id}/shares/{share_id}
+
+Revoke a share link (sets `is_active` to `false`). The share creator can always revoke; team admins can revoke any share in their team's meeting.
+
+**Response** (204): No content.
+
+#### GET /public/shares/{token}
+
+Public endpoint — view a shared meeting summary without authentication. Returns 404 if the token is invalid, expired, or revoked.
+
+**Response** (200):
+```json
+{
+  "title": "Sprint Planning — Week 30",
+  "transcript": "...",
+  "action_items": "...",
+  "decisions": "...",
+  "key_points": "...",
+  "mode": "general",
+  "metadata": null
+}
+```
+
 ### Webhook Configuration
 
 Webhooks fire automatically when a batch completes processing. Notifications include HMAC-SHA256 payload signing for verification.
@@ -351,7 +430,7 @@ Health check endpoint returning service status.
 ```json
 {
   "status": "healthy",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "database": "connected"
 }
 ```
@@ -362,9 +441,10 @@ Health check endpoint returning service status.
 .venv/bin/python -m pytest -q
 ```
 
-275 tests covering:
+345 tests covering:
 - 112 v0.1.0 regression tests (transcription, extraction, export, healthcare/legal modes)
 - 163 v0.2.0 tests (DB models, JWT auth, batch processing, team CRUD, webhooks, PDF/ZIP export)
+- 70 v0.3.0 tests (share creation, listing, revocation, public access, expiry, access control)
 
 ## Deployment
 
