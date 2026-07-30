@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.3.0] — 2026-07-30
+
+### Features
+
+- **Meeting Sharing** — New `POST /share` endpoint generates shareable links for meetings. Supports configurable expiration (TTL) and manual revocation. Access control: only meeting owner or team members (admin/member) can share; viewers cannot.
+- **Public Link Access** — New `GET /public/shares/{token}` endpoint serves meeting data from a share token without requiring authentication. Supports optional password protection (future). Invalid, expired, and revoked tokens return 404.
+- **SharedLink DB Model** — New `SharedLink` SQLAlchemy model tracking `meeting_id`, `created_by`, `token` (UUID), `expires_at`, `revoked`, and `created_at` timestamps. Auto-expiration query support.
+- **Link Expiration & Revocation** — `DELETE /share/{share_id}` for share owners and team admins to revoke links. `expires_at` field enforces time-based expiration on public access.
+- **Share Listing** — `GET /shares` returns paginated share links scoped to the authenticated user's accessible meetings.
+- **Public Routes Module** — New `routes/public.py` module for unauthenticated endpoints (token-based meeting access), wired into the app router.
+- **Test DB Infrastructure** — `conftest.py` updated with async test DB session fixtures, engine override pattern, and isolated SQLite in-memory database for sharing and public route tests.
+
+### Fixes
+
+- **Timezone comparison bug** in `public.py` — Fixed naive/aware datetime comparison by ensuring `expires_at` comparison uses UTC-aware `datetime.now(timezone.utc)`.
+- **Removed .venv from git tracking** — Virtual environment directory removed from version control; `.gitignore` updated.
+- **bcrypt/passlib compatibility** — bcrypt 4.x pinned to resolve passlib 1.7.4 crash on new venv installs.
+- **17 ruff auto-fixes** — Unused imports cleaned across multiple modules.
+
+### Tests
+
+- **345 tests passing** (0 failures, 0 skipped) — 70 new tests in `test_sharing.py` covering share creation, listing, revocation, public access, expiry, invalid/revoked tokens, team-scoped access control, and edge cases.
+- **All acceptance criteria verified** — Meeting Sharing, Public Links, Link Expiration & Revocation, Access Control.
+
+### Docs
+
+- README.md updated with v0.3.0 sharing endpoints, public link usage, and authentication notes.
+
 ## [0.2.0] — 2026-07-28
 
 ### Features
