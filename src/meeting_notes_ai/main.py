@@ -2,9 +2,9 @@
 
 from fastapi import FastAPI
 
-from meeting_notes_ai.routes import health, meetings
+from meeting_notes_ai.routes import health, meetings, sharing
 from meeting_notes_ai import auth
-from meeting_notes_ai.routes import batches, teams, webhooks
+from meeting_notes_ai.routes import batches, public, teams, webhooks
 
 app = FastAPI(title="MeetingNotesAI", version="0.2.0")
 
@@ -14,3 +14,7 @@ app.include_router(auth.router)
 app.include_router(batches.router)
 app.include_router(teams.router)
 app.include_router(webhooks.router)
+
+# v0.3.0 — Meeting Sharing
+app.include_router(sharing.router)
+app.include_router(public.router)

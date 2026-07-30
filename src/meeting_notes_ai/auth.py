@@ -123,7 +123,7 @@ async def decode_access_token(token: str) -> dict[str, Any]:
 
 
 async def get_current_user(
-    authorization: str = Header(..., description="Bearer token"),
+    authorization: str | None = Header(None, description="Bearer token"),
     db: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
     """FastAPI dependency: extract and validate current user from Bearer token.
@@ -139,7 +139,7 @@ async def get_current_user(
     Raises:
         HTTPException(401) if token is missing or invalid.
     """
-    if not authorization.startswith("Bearer "):
+    if authorization is None or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Invalid authorization header")
 
     token = authorization[len("Bearer "):]

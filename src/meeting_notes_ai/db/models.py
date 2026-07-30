@@ -1,6 +1,6 @@
 """SQLAlchemy ORM models for MeetingNotesAI v0.2.0.
 
-Models: User, Team, TeamMember, Meeting, BatchJob, BatchFileResult, WebhookSubscription
+Models: User, Team, TeamMember, Meeting, SharedLink, BatchJob, BatchFileResult, WebhookSubscription
 """
 
 from __future__ import annotations
@@ -162,6 +162,40 @@ class Meeting(Base, TimestampMixin):
     # Relationships
     user: Mapped["User"] = relationship(back_populates="meetings")
     team: Mapped[Optional["Team"]] = relationship(back_populates="meetings")
+    shared_links: Mapped[list["SharedLink"]] = relationship(
+        back_populates="meeting", cascade="all, delete-orphan"
+    )
+
+
+# ── SharedLink ──────────────────────────────────────────────────────────────────
+
+
+class SharedLink(Base, TimestampMixin):
+    __tablename__ = "shared_links"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    meeting_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("meetings.id"), nullable=False
+    )
+    team_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("teams.id"), nullable=True
+    )
+    created_by: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id"), nullable=False
+    )
+    token: Mapped[str] = mapped_column(
+        String(100), unique=True, nullable=False, index=True
+    )
+    expires_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    # Relationships
+    meeting: Mapped["Meeting"] = relationship(back_populates="shared_links")
+    creator: Mapped["User"] = relationship()
 
 
 # ── BatchJob ────────────────────────────────────────────────────────────────────
