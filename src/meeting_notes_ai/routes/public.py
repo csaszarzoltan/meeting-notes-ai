@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from meeting_notes_ai.db.models import Meeting, SharedLink
+from meeting_notes_ai.db.models import SharedLink
 from meeting_notes_ai.db.session import get_db_session
 
 router = APIRouter(prefix="/public", tags=["public"])
@@ -62,7 +62,11 @@ async def get_share_by_token(
         raise HTTPException(status_code=404, detail="Share link has been revoked")
 
     # Check if the share has expired
-    if share.expires_at is not None and share.expires_at < datetime.now(timezone.utc).replace(tzinfo=None):
+    # Normalize to naive datetime for cross-DB compatibility
+    # (SQLite returns naive, PostgreSQL returns timezone-aware)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    expires_at = share.expires_at.replace(tzinfo=None) if share.expires_at is not None else None
+    if expires_at is not None and expires_at < now:
         raise HTTPException(status_code=404, detail="Share link has expired")
 
     # Return meeting summary

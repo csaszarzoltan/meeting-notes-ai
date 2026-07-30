@@ -19,8 +19,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from meeting_notes_ai.db.models import WebhookEvent, WebhookSubscription
-from meeting_notes_ai.db.session import get_db_session
-
 
 # ── Request/Response Schemas ────────────────────────────────────────────────────
 

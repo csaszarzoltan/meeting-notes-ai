@@ -9,16 +9,17 @@ Endpoints:
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from meeting_notes_ai.auth import get_current_user
 from meeting_notes_ai.db.session import get_db_session
+from meeting_notes_ai.services import webhooks as wh_service
 from meeting_notes_ai.services.webhooks import (
     WebhookSubscriptionCreate as ServiceWebhookCreate,
+)
+from meeting_notes_ai.services.webhooks import (
     WebhookSubscriptionResponse,
 )
-from meeting_notes_ai.services import webhooks as wh_service
 
 router = APIRouter(prefix="/api/v1/webhooks", tags=["webhooks"])
 

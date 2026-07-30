@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
-from typing import AsyncIterator, Optional
+from typing import Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-
-from meeting_notes_ai.db.engine import create_session_factory
 
 # Will be set during app startup
 _session_factory: Optional[async_sessionmaker[AsyncSession]] = None

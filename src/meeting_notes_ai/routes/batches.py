@@ -11,8 +11,7 @@ from __future__ import annotations
 import json
 import os
 import time
-import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
@@ -98,7 +97,8 @@ async def _process_single_file(
 
         # Process through existing pipeline
         api_key = os.getenv("OPENAI_API_KEY", "")
-        meeting_mode = MeetingMode(mode) if mode in [m.value for m in MeetingMode] else MeetingMode.GENERAL
+        allowed_modes = [m.value for m in MeetingMode]
+        meeting_mode = MeetingMode(mode) if mode in allowed_modes else MeetingMode.GENERAL
 
         # Transcribe
         from meeting_notes_ai.services.transcription import TranscriptionService

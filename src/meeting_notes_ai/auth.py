@@ -9,7 +9,7 @@ Endpoints:
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from jose import JWTError, jwt
@@ -18,7 +18,7 @@ from pydantic import BaseModel, EmailStr
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from meeting_notes_ai.db.models import TeamMember, TeamRole, User
+from meeting_notes_ai.db.models import TeamMember, User
 from meeting_notes_ai.db.session import get_db_session
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])

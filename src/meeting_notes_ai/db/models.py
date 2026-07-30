@@ -6,7 +6,7 @@ Models: User, Team, TeamMember, Meeting, SharedLink, BatchJob, BatchFileResult, 
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from enum import Enum as PyEnum
 from typing import Optional
 
@@ -21,7 +21,6 @@ from sqlalchemy import (
     Text,
     func,
 )
-from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
