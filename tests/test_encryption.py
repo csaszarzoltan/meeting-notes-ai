@@ -164,16 +164,14 @@ class TestEncryptionServiceBehavioral:
             os.environ["HIPAA_MASTER_KEY"] = old
 
     @pytest.fixture
-    def svc(self):
+    def svc(self, tmp_path, monkeypatch):
         from meeting_notes_ai.hipaa.config import HIPAAConfig
-        import json
-        from pathlib import Path
 
-        # Clear any persisted key store from previous tests (B4 fix)
-        key_store_path = Path.home() / ".meeting-notes-ai" / "key_store.json"
-        if key_store_path.exists():
-            key_store_path.unlink()
-
+        # B4 fix: redirect HOME to a per-test temp dir instead of
+        # deleting the real ~/.meeting-notes-ai/key_store.json — running
+        # the suite on a deployed host used to destroy the service's
+        # wrapped DEKs.
+        monkeypatch.setenv("HOME", str(tmp_path))
         return EncryptionService(
             HIPAAConfig(encryption_enabled=True),
             lambda: None,

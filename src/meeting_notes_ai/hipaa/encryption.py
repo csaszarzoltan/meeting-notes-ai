@@ -12,13 +12,17 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import logging
 import os
+import tempfile
 import threading
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+logger = logging.getLogger(__name__)
 
 # ── Exception hierarchy ────────────────────────────────────────────────────────
 
@@ -81,17 +85,27 @@ class EncryptionService:
         self._key_store: dict[str, str] = {}
         # In-memory key metadata: tenant_id -> KeyInfo
         self._key_meta: dict[str, KeyInfo] = {}
-        
+
         # File persistence for DEK survival across restarts (B4 fix)
         self._key_store_path = Path.home() / ".meeting-notes-ai" / "key_store.json"
         self._key_store_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
-        
+        # Set when the on-disk store could not be loaded/verified (B4 fix):
+        # surfaced by get_encryption_status() as status=\"degraded\" so a
+        # corrupt store is never a silent fresh start.
+        self._store_error: str | None = None
+
         # Load persisted keys on startup
         self._load_key_store()
 
     def _load_key_store(self) -> None:
-        """Load wrapped DEKs from disk to survive restarts (B4 fix)."""
+        """Load wrapped DEKs from disk to survive restarts (B4 fix).
+
+        Failures are logged loudly and recorded in ``_store_error`` —
+        a corrupt store must never silently restart the service with an
+        empty key registry (that would make wrapped DEKs unrecoverable
+        without anyone noticing).
+        """
         if not self._key_store_path.exists():
             return
         try:
@@ -113,13 +127,31 @@ class EncryptionService:
                         )
                     except Exception:
                         # Key exists but can't be unwrapped (wrong KEK?) — skip
-                        pass
+                        logger.error(
+                            "Failed to unwrap stored DEK for tenant %s "
+                            "(wrong KEK or corrupt store %s)",
+                            tenant_id,
+                            self._key_store_path,
+                            exc_info=True,
+                        )
         except Exception:
-            # Corrupted file — start fresh
-            pass
+            self._store_error = "key store corrupt or unreadable"
+            logger.error(
+                "Failed to load key store %s — starting with empty key "
+                "registry; wrapped DEKs are NOT recoverable until the "
+                "store is restored",
+                self._key_store_path,
+                exc_info=True,
+            )
 
     def _save_key_store(self) -> None:
-        """Persist wrapped DEKs to disk for restart survival (B4 fix)."""
+        """Persist wrapped DEKs to disk for restart survival (B4 fix).
+
+        Writes atomically (temp file + rename) with 0600 permissions so a
+        crash mid-write cannot corrupt the store and the file never
+        inherits a permissive umask. Failures are logged loudly — the
+        persistence layer must not fail silently.
+        """
         try:
             with self._lock:
                 timestamps = {}
@@ -129,12 +161,31 @@ class EncryptionService:
                     "key_store": self._key_store,
                     "timestamps": timestamps,
                 }
-                self._key_store_path.write_text(
-                    json.dumps(data, indent=2), encoding="utf-8"
+                serialized = json.dumps(data, indent=2)
+                fd, tmp_name = tempfile.mkstemp(
+                    prefix="key_store.", suffix=".tmp",
+                    dir=str(self._key_store_path.parent),
                 )
+                try:
+                    with os.fdopen(fd, "w", encoding="utf-8") as f:
+                        f.write(serialized)
+                        f.flush()
+                        os.fsync(f.fileno())
+                    os.chmod(tmp_name, 0o600)
+                    os.replace(tmp_name, self._key_store_path)
+                except BaseException:
+                    try:
+                        os.unlink(tmp_name)
+                    except OSError:
+                        pass
+                    raise
         except Exception:
-            # Best-effort persistence — don't crash the request
-            pass
+            logger.error(
+                "Failed to persist key store %s — wrapped DEKs may be "
+                "lost on restart",
+                self._key_store_path,
+                exc_info=True,
+            )
 
     # ── Internal crypto helpers ────────────────────────────────────────────────
 
@@ -185,13 +236,44 @@ class EncryptionService:
 
     async def generate_tenant_key(self, tenant_id: str) -> str:
         """Generate a DEK for *tenant_id* wrapped with the current KEK.
-        
+
         Returns the key fingerprint.
         Persisted to disk for restart survival (B4 fix).
+
+        Idempotent on an existing tenant (B4): if the tenant already has
+        a key, the existing fingerprint is returned and the stored key is
+        NOT overwritten — regenerating would make all ciphertext produced
+        under the old DEK permanently unrecoverable.
         """
         loop = _get_loop()
 
         def _gen() -> str:
+            existing = self._key_meta.get(tenant_id)
+            if existing is not None:
+                return existing.key_fingerprint
+            if tenant_id in self._key_store:
+                # Wrapped key present but metadata missing (e.g. legacy
+                # store) — reuse it rather than overwriting.
+                try:
+                    fp = _fingerprint(self._unwrap_key(self._key_store[tenant_id]))
+                    self._key_meta[tenant_id] = KeyInfo(
+                        tenant_id=tenant_id,
+                        key_fingerprint=fp,
+                        algorithm="AES-256-GCM",
+                        is_active=True,
+                        created_at=_now_iso(),
+                        rotated_at=None,
+                    )
+                    self._save_key_store()
+                    return fp
+                except Exception:
+                    logger.error(
+                        "Stored key for tenant %s cannot be unwrapped; "
+                        "refusing to overwrite it",
+                        tenant_id,
+                        exc_info=True,
+                    )
+                    raise
             dek = self._generate_dek()
             wrapped = self._wrap_key(dek)
             self._key_store[tenant_id] = wrapped
@@ -302,7 +384,7 @@ class EncryptionService:
 
     async def rotate_master_key(self, new_kek_secret: str) -> int:
         """Re-wrap all DEKs with a new KEK. Returns count of re-wrapped keys.
-        
+
         Persisted to disk for restart survival (B4 fix).
         """
         loop = _get_loop()
@@ -339,6 +421,19 @@ class EncryptionService:
             return self._key_meta[tenant_id]
 
         return await loop.run_in_executor(None, _info)
+
+    async def list_key_info(self) -> dict[str, KeyInfo]:
+        """Return key metadata for every provisioned tenant.
+
+        Used by the compliance dashboard to count live keys; never
+        exposes plaintext key material.
+        """
+        loop = _get_loop()
+
+        def _list() -> dict[str, KeyInfo]:
+            return dict(self._key_meta)
+
+        return await loop.run_in_executor(None, _list)
 
 
 # ── Module-level helpers ───────────────────────────────────────────────────────

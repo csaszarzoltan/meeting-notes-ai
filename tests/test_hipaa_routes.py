@@ -351,6 +351,7 @@ class TestRotateKey:
         self, client, auth_headers, tmp_path, monkeypatch
     ):
         monkeypatch.setenv("HIPAA_MASTER_KEY", "apitest-master-key")
+        monkeypatch.setenv("HOME", str(tmp_path))
         svc = EncryptionService(config=HIPAAConfig())
         await svc.generate_tenant_key("tenant-1")
         app.dependency_overrides[get_encryption_service] = lambda: svc
