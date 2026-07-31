@@ -14,7 +14,7 @@ from meeting_notes_ai.routes import (
     webhooks,
 )
 
-app = FastAPI(title="MeetingNotesAI", version="0.2.0")
+app = FastAPI(title="MeetingNotesAI", version="0.5.0")
 
 app.include_router(health.router)
 app.include_router(meetings.router)

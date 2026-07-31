@@ -42,7 +42,7 @@ class TestAppInterface:
         """App should be a FastAPI instance with expected metadata."""
         assert isinstance(app, FastAPI)
         assert app.title == "MeetingNotesAI"
-        assert app.version == "0.2.0"
+        assert app.version == "0.5.0"
 
     def test_health_router_included(self):
         """Health check router should be included in the app."""
