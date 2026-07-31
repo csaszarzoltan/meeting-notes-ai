@@ -3,15 +3,19 @@
 **Version:** 0.5.0
 
 HIPAA-compliant healthcare mode for MeetingNotesAI. This document covers the
-HIPAA compliance library shipped in v0.5.0: PHI redaction, audit logging,
-encryption, BAA lifecycle, and the compliance dashboard data service.
+HIPAA compliance suite shipped in v0.5.0: PHI redaction, audit logging,
+encryption, BAA lifecycle, and the compliance dashboard — available both as a
+Python library (`meeting_notes_ai.hipaa.*`) and as wired REST endpoints
+(`/api/v1/transcribe`, `/api/v1/audit-logs*`, `/api/v1/encryption/rotate-key`,
+`/api/v1/compliance/*`).
 
-> **Scope note (v0.5.0):** the HIPAA suite ships as a **Python library**
-> (`meeting_notes_ai.hipaa.*`). No HTTP endpoints are exposed in this release —
-> there is no `/api/v1/hipaa/*` route group yet, and the meeting endpoint
-> (`POST /api/v1/meetings`) does not perform PHI redaction automatically.
-> Integrate the library directly, or wire the FastAPI dependencies in
-> `hipaa/middleware.py` into your own routes.
+> **Scope note (v0.5.0):** the HIPAA suite ships as a **Python library** with a
+> **wired REST surface**. All data endpoints are registered in `main.py` and
+> require a Bearer JWT; `GET /api/v1/compliance/dashboard/html` serves the
+> dashboard page without authentication (its client-side fetches need the
+> token). The meeting endpoint (`POST /api/v1/meetings`) still does **not**
+> perform PHI redaction automatically — use `POST /api/v1/transcribe` with
+> `phi_redaction=true` for redacted transcription.
 
 ---
 
@@ -19,15 +23,16 @@ encryption, BAA lifecycle, and the compliance dashboard data service.
 
 1. [Overview](#overview)
 2. [Quick Start](#quick-start)
-3. [PHI Redaction](#phi-redaction)
-4. [Audit Logging](#audit-logging)
-5. [Encryption](#encryption)
-6. [BAA Lifecycle](#baa-lifecycle)
-7. [Compliance Dashboard](#compliance-dashboard)
-8. [Configuration Reference](#configuration-reference)
-9. [Library API Surface](#library-api-surface)
-10. [Troubleshooting](#troubleshooting)
-11. [HIPAA Compliance Checklist](#hipaa-compliance-checklist)
+3. [REST API](#rest-api)
+4. [PHI Redaction](#phi-redaction)
+5. [Audit Logging](#audit-logging)
+6. [Encryption](#encryption)
+7. [BAA Lifecycle](#baa-lifecycle)
+8. [Compliance Dashboard](#compliance-dashboard)
+9. [Configuration Reference](#configuration-reference)
+10. [Library API Surface](#library-api-surface)
+11. [Troubleshooting](#troubleshooting)
+12. [HIPAA Compliance Checklist](#hipaa-compliance-checklist)
 
 ---
 
@@ -52,9 +57,11 @@ encryption, BAA lifecycle, and the compliance dashboard data service.
 
 Documented here so nobody relies on it:
 
-- No REST endpoints (`/api/v1/hipaa/*`) are registered in `main.py`.
-- The bundled `templates/dashboard.html.jinja` exists but is not served by any
-  route.
+- `POST /api/v1/meetings` does **not** redact PHI automatically — use
+  `POST /api/v1/transcribe` with `phi_redaction=true`, or the library directly.
+- The old analysis-brief `/api/v1/hipaa/*` endpoint paths were never shipped;
+  the canonical paths are `/api/v1/transcribe`, `/api/v1/audit-logs*`,
+  `/api/v1/encryption/rotate-key`, and `/api/v1/compliance/*`.
 - `HIPAAConfig.load()` returns defaults — **no environment-variable overrides
   are implemented yet**. Configuration is done by constructing `HIPAAConfig`
   with explicit values.
@@ -99,8 +106,275 @@ async def main():
 asyncio.run(main())
 ```
 
-See [`examples/`](../examples/) for five runnable scripts covering every
-feature area.
+See [`examples/`](../examples/) for runnable scripts covering every feature
+area (library API) and the full REST surface
+(`examples/hipaa_rest_endpoints.py`).
+
+---
+
+## REST API
+
+The HIPAA suite is wired into the FastAPI app as a route group
+(`meeting_notes_ai/routes/hipaa.py`, registered in `main.py`). The data
+endpoints reuse the same `get_current_user` Bearer-JWT dependency as
+`/api/v1/meetings`; the dashboard HTML page is the only unauthenticated route.
+
+### Authentication
+
+All data endpoints return **401** without a valid token:
+
+```
+Authorization: Bearer <jwt>
+```
+
+Get a token via `POST /api/v1/auth/login` (see README — Authentication). The
+examples below assume `$TOKEN` holds it.
+
+### Environment variables
+
+| Variable | Required for | Missing behaviour |
+|----------|--------------|-------------------|
+| `OPENAI_API_KEY` | `POST /api/v1/transcribe` | transcription fails (500) |
+| `HIPAA_MASTER_KEY` | `POST /api/v1/encryption/rotate-key` | **503** `"Encryption unavailable: set HIPAA_MASTER_KEY"` |
+
+### Endpoints
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| POST | `/api/v1/transcribe` | Bearer | Transcribe audio; optional `language`, `phi_redaction` (bool). Writes an audit entry (`action=transcribe`). |
+| GET | `/api/v1/audit-logs` | Bearer | Query audit entries; filters `actor`, `action`, `resource`; `limit` default 100, max 1000. Newest first. |
+| GET | `/api/v1/audit-logs/stats` | Bearer | Aggregate stats; optional `since` (ISO). |
+| GET | `/api/v1/audit-logs/export` | Bearer | JSONL export for a date range; `start`, `end` (ISO) required. |
+| POST | `/api/v1/encryption/rotate-key` | Bearer | Rotate master KEK (`new_master_key`); re-wraps all tenant DEKs. |
+| POST | `/api/v1/compliance/baa/generate` | Bearer | Generate + immutably store a BAA (`org_name`, `ba_name`, `signed_by`). |
+| GET | `/api/v1/compliance/dashboard` | Bearer | Combined `{summary, phi_stats, activity}`. |
+| GET | `/api/v1/compliance/dashboard/summary` | Bearer | Summary card. |
+| GET | `/api/v1/compliance/dashboard/phi-stats` | Bearer | PHI stats for charts. |
+| GET | `/api/v1/compliance/dashboard/activity` | Bearer | Recent activity; `limit` default 50, max 500. |
+| GET | `/api/v1/compliance/dashboard/html` | **none** | Serves `templates/dashboard.html.jinja` (Chart.js page fetching the three data endpoints above). |
+
+### POST /api/v1/transcribe
+
+Multipart form upload. Fields:
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `file` | file | yes | — | Audio file (WAV, MP3, MP4, WebM — any format the Whisper API accepts) |
+| `language` | str | no | auto | ISO language code for the Whisper API |
+| `phi_redaction` | bool | no | `false` | Mask PHI in the returned transcript |
+
+```bash
+curl -X POST http://localhost:8000/api/v1/transcribe \
+  -H "Authorization: Bearer $TOKEN" \
+  -F "file=@consultation.mp3" \
+  -F "language=en" \
+  -F "phi_redaction=true"
+```
+
+Response (200) — PHI masked, `phi_redacted` set, match count reported:
+
+```json
+{
+  "text": "[REDACTED] called with SSN [REDACTED].",
+  "language": "en",
+  "duration_seconds": 42.1,
+  "segments": [
+    {"start": 0.0, "end": 1.5, "text": "[REDACTED]"}
+  ],
+  "phi_redacted": true,
+  "redaction_matches": 2
+}
+```
+
+Every call writes an audit entry (`action=transcribe`, `phi_classification`
+`phi` when redaction ran, `none` otherwise). Requires `OPENAI_API_KEY`
+(Whisper API); failures surface as 500 `"Transcription failed"`.
+
+### GET /api/v1/audit-logs
+
+```bash
+curl "http://localhost:8000/api/v1/audit-logs?actor=user-42&limit=20" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Response (200) — newest first:
+
+```json
+[
+  {
+    "timestamp": "2026-07-31T08:05:00Z",
+    "actor": "user-7",
+    "action": "phi.scan",
+    "resource": "meeting:def",
+    "phi_classification": "medium",
+    "details": {},
+    "outcome": "success",
+    "ip_address": "10.0.0.2",
+    "user_agent": ""
+  }
+]
+```
+
+### GET /api/v1/audit-logs/stats
+
+```bash
+curl "http://localhost:8000/api/v1/audit-logs/stats?since=2026-07-01T00:00:00Z" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Response (200):
+
+```json
+{
+  "total_entries": 1,
+  "unique_actors": 1,
+  "actions": {"phi.redact": 1},
+  "actors": {"user-42": 1},
+  "outcomes": {"success": 1},
+  "phi_classifications": {"high": 1},
+  "earliest": "2026-07-31T08:00:00Z",
+  "latest": "2026-07-31T08:00:00Z"
+}
+```
+
+### GET /api/v1/audit-logs/export
+
+```bash
+curl "http://localhost:8000/api/v1/audit-logs/export?start=2026-07-01&end=2026-12-31" \
+  -H "Authorization: Bearer $TOKEN" -O -J
+```
+
+Returns a **JSONL attachment** (`Content-Disposition: attachment;
+filename="audit-export-...-....jsonl"`, `Content-Type: application/x-ndjson`).
+Both `start` and `end` are required ISO values.
+
+### POST /api/v1/encryption/rotate-key
+
+```bash
+curl -X POST http://localhost:8000/api/v1/encryption/rotate-key \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"new_master_key": "brand-new-kek-secret"}'
+```
+
+Response (200):
+
+```json
+{
+  "re_wrapped_keys": 3,
+  "rotated_at": "2026-07-31T09:00:00Z"
+}
+```
+
+`new_master_key` is required (min length 1; empty → 422). Requires
+`HIPAA_MASTER_KEY`; when it is missing (checked lazily on first use) the
+endpoint returns **503**
+`{"detail": "Encryption unavailable: set HIPAA_MASTER_KEY"}`. After
+rotation, persist the new secret in `HIPAA_MASTER_KEY` so restarts keep
+working. Writes an audit entry (`action=encryption.rotate_key`).
+
+### POST /api/v1/compliance/baa/generate
+
+```bash
+curl -X POST http://localhost:8000/api/v1/compliance/baa/generate \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"org_name": "Acme Health Systems", "ba_name": "CloudNotes Inc.", "signed_by": "Dr. Jane Smith"}'
+```
+
+Response (200):
+
+```json
+{
+  "agreement_id": "3a0e76bd-7607-4715-847b-9e084b1b7031",
+  "org_name": "Acme Health Systems",
+  "ba_name": "CloudNotes Inc.",
+  "effective_date": "2026-07-31",
+  "status": "active",
+  "content_md": "# Business Associate Agreement\n\n..."
+}
+```
+
+`org_name`, `ba_name`, and `signed_by` are all required (missing → 422). The
+rendered markdown (HIPAA §164.504(e) clauses) is stored immutably and returned
+in `content_md`. Writes an audit entry (`action=baa.generate`).
+
+### GET /api/v1/compliance/dashboard
+
+Combined payload for dashboard consumers — `{summary, phi_stats, activity}`
+(the same shapes as the three endpoints below):
+
+```bash
+curl http://localhost:8000/api/v1/compliance/dashboard \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### GET /api/v1/compliance/dashboard/summary
+
+```bash
+curl http://localhost:8000/api/v1/compliance/dashboard/summary \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Response (200):
+
+```json
+{
+  "total_phi_scans": 2,
+  "total_redactions": 0,
+  "active_encryption_keys": 0,
+  "active_baa_agreements": 1,
+  "audit_entries_30d": 3,
+  "overall_compliance_score": 1.0,
+  "last_audit_entry": "2026-07-31T09:00:00Z",
+  "encryption_health": "healthy"
+}
+```
+
+Field semantics match the library `ComplianceSummary` (see the Compliance
+Dashboard section below) — including the caveats (`total_redactions` is 0,
+`active_encryption_keys` 0 unless a `__dashboard__` tenant key exists,
+`encryption_health` static `healthy`).
+
+### GET /api/v1/compliance/dashboard/phi-stats
+
+```bash
+curl http://localhost:8000/api/v1/compliance/dashboard/phi-stats \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Response (200) — keys:
+
+```json
+{
+  "by_category": {"ssn": 1, "name": 1},
+  "by_risk_level": {"high": 2},
+  "by_date": {},
+  "total_false_positives": 0,
+  "total_llm_corrections": 0
+}
+```
+
+### GET /api/v1/compliance/dashboard/activity
+
+```bash
+curl "http://localhost:8000/api/v1/compliance/dashboard/activity?limit=10" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Response (200) — newest-first list of audit entries (same shape as
+`GET /api/v1/audit-logs`).
+
+### GET /api/v1/compliance/dashboard/html
+
+No auth required — serves the Chart.js dashboard page:
+
+```bash
+curl http://localhost:8000/api/v1/compliance/dashboard/html
+```
+
+Returns `text/html`. The page fetches `/summary`, `/phi-stats`, and
+`/activity` from the browser, so those requests must carry the Bearer token.
 
 ---
 
@@ -506,7 +780,7 @@ Environment variables actually read by the code:
 | `hipaa.encryption` | `EncryptionService`, `KeyInfo`, `EncryptionError`, `DecryptionError`, `KeyNotFoundError` |
 | `hipaa.baa` | `BAAService`, `BAATemplate`, `BAAgreement`, `BAAgreementSummary` |
 | `hipaa.dashboard` | `ComplianceService`, `ComplianceSummary`, `PHIStats` |
-| `hipaa.middleware` | FastAPI dependencies `get_phi_redactor`, `get_audit_logger`, `get_encryption_service` (not wired to routes in this release) |
+| `hipaa.middleware` | FastAPI dependencies `get_phi_redactor`, `get_audit_logger`, `get_encryption_service` (process-wide singletons, wired into the routes in `routes/hipaa.py`) |
 
 ---
 

@@ -1,8 +1,8 @@
 # HIPAA Examples
 
-Runnable scripts demonstrating the `meeting_notes_ai.hipaa` library API
-(shipped in v0.5.0). Each script is verified to run with the repository
-virtualenv.
+Runnable scripts demonstrating the `meeting_notes_ai.hipaa` library API and
+the wired REST surface (shipped in v0.5.0). Each script is verified to run
+with the repository virtualenv.
 
 ## Prerequisites
 
@@ -37,6 +37,11 @@ PYTHONPATH=src .venv/bin/python examples/hipaa_baa_generate.py
 
 # Compliance dashboard — aggregate all modules into a compliance summary
 HIPAA_MASTER_KEY=dev-master-key PYTHONPATH=src .venv/bin/python examples/hipaa_compliance_dashboard.py
+
+# REST endpoints — exercise the full /api/v1 HIPAA surface in-process
+# (TestClient; faked transcriber, temp audit dir, in-memory DB — no server,
+# no OPENAI_API_KEY, no database needed)
+HIPAA_MASTER_KEY=dev-master-key PYTHONPATH=src .venv/bin/python examples/hipaa_rest_endpoints.py
 ```
 
 ## Feature → script mapping
@@ -48,3 +53,4 @@ HIPAA_MASTER_KEY=dev-master-key PYTHONPATH=src .venv/bin/python examples/hipaa_c
 | Encryption key management (provision, encrypt, rotate) | `hipaa_rotate_key.py` |
 | BAA template generation & storage | `hipaa_baa_generate.py` |
 | Compliance dashboard aggregation | `hipaa_compliance_dashboard.py` |
+| REST endpoints (transcribe, audit-logs*, rotate-key, baa, dashboard) | `hipaa_rest_endpoints.py` |

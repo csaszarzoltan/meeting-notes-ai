@@ -14,7 +14,7 @@ Micro-SaaS for meeting transcription and structured notes.
   - **General**: Standard meeting notes
   - **Healthcare**: SOAP notes with HIPAA compliance markers
   - **Legal**: Deposition summaries with objection tracking
-- **HIPAA Compliance Library (v0.5.0+)**: PHI redaction, append-only audit logging, AES-256-GCM encryption at rest, BAA template generation, and a compliance dashboard data service — see [HIPAA Mode](docs/HIPAA_MODE.md)
+- **HIPAA Compliance (v0.5.0+)**: PHI redaction, append-only audit logging, AES-256-GCM encryption at rest, BAA template generation, and a compliance dashboard — as a Python library **and** as REST endpoints (see [HIPAA Mode](docs/HIPAA_MODE.md))
 - **Multi-format Export**: JSON, Markdown, PDF, and ZIP batch download
 - **Batch Processing**: Upload up to 10 audio files per batch with per-file status tracking
 - **Team Workspaces**: Multi-user teams with role-based access (admin/member/viewer)
@@ -46,16 +46,72 @@ transcription and PHI (Protected Health Information) processing. It lives in
   encryption, BAA, and PHI statistics into a compliance summary and chart-ready
   data.
 
-> **Scope note:** in v0.5.0 the suite is a **Python library** — there are no
-> `/api/v1/hipaa/*` HTTP endpoints yet, and `POST /api/v1/meetings` does not
-> redact PHI automatically. Integrate the library directly (or wire the
-> FastAPI dependencies in `hipaa/middleware.py` into your own routes).
+### REST Endpoints (v0.5.0+)
+
+All HIPAA data endpoints are wired into the FastAPI app since v0.5.0 and
+require a **Bearer JWT** (`Authorization: Bearer <token>` — the same
+`get_current_user` dependency as `/api/v1/meetings`). The dashboard HTML page
+is the one exception: `GET /api/v1/compliance/dashboard/html` is
+unauthenticated (it serves the Chart.js shell; the page's client-side fetches
+need the token).
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/api/v1/transcribe` | Transcribe audio (multipart `file`); optional `language`, `phi_redaction` (bool). Requires `OPENAI_API_KEY`. Writes an audit entry (`action=transcribe`). |
+| GET | `/api/v1/audit-logs` | Query audit entries (filters: `actor`, `action`, `resource`; `limit` default 100, max 1000), newest first. |
+| GET | `/api/v1/audit-logs/stats` | Aggregate audit statistics (optional `since` ISO). |
+| GET | `/api/v1/audit-logs/export` | Export audit entries in a date range (`start`, `end` ISO) as a JSONL attachment. |
+| POST | `/api/v1/encryption/rotate-key` | Rotate the master KEK (`new_master_key`); re-wraps all tenant DEKs. Requires `HIPAA_MASTER_KEY` (503 when missing). |
+| POST | `/api/v1/compliance/baa/generate` | Generate + immutably store a BAA (`org_name`, `ba_name`, `signed_by`). |
+| GET | `/api/v1/compliance/dashboard` | Combined compliance payload (`summary`, `phi_stats`, `activity`). |
+| GET | `/api/v1/compliance/dashboard/summary` | Compliance summary card. |
+| GET | `/api/v1/compliance/dashboard/phi-stats` | PHI detection statistics (by category/risk/date). |
+| GET | `/api/v1/compliance/dashboard/activity` | Recent audit activity (`limit` default 50, max 500), newest first. |
+| GET | `/api/v1/compliance/dashboard/html` | Serves the Chart.js dashboard page (unauthenticated). |
+
+Quick examples (get a token from `POST /api/v1/auth/login` first):
+
+```bash
+# Transcribe with PHI redaction (multipart; OPENAI_API_KEY must be set)
+curl -X POST http://localhost:8000/api/v1/transcribe \
+  -H "Authorization: Bearer $TOKEN" \
+  -F "file=@consultation.mp3" \
+  -F "phi_redaction=true"
+
+# Query audit logs (newest first, default limit 100)
+curl http://localhost:8000/api/v1/audit-logs \
+  -H "Authorization: Bearer $TOKEN"
+
+# Rotate the master key
+curl -X POST http://localhost:8000/api/v1/encryption/rotate-key \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"new_master_key": "new-kek-secret"}'
+
+# Generate a Business Associate Agreement
+curl -X POST http://localhost:8000/api/v1/compliance/baa/generate \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"org_name": "Acme Health Systems", "ba_name": "CloudNotes Inc.", "signed_by": "Dr. Jane Smith"}'
+
+# Compliance dashboard (combined)
+curl http://localhost:8000/api/v1/compliance/dashboard \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+> **Scope note:** `POST /api/v1/meetings` still does **not** redact PHI
+> automatically — use `POST /api/v1/transcribe` with `phi_redaction=true`, or
+> the library directly. The old analysis-brief `/api/v1/hipaa/*` paths were
+> never shipped; the canonical paths are the `/api/v1/transcribe`,
+> `/api/v1/audit-logs*`, `/api/v1/encryption/rotate-key`, and
+> `/api/v1/compliance/*` routes above.
 
 ### Configuration
 
 Configuration is done with the `HIPAAConfig` dataclass; defaults are safe for
-development. The only environment variable read by the code is
-`HIPAA_MASTER_KEY` (the encryption KEK seed):
+development. The library reads `HIPAA_MASTER_KEY` (the encryption KEK seed);
+the REST endpoints additionally require `OPENAI_API_KEY` (transcription) and
+`HIPAA_MASTER_KEY` (key rotation):
 
 | Field | Default | Description |
 |----------|---------|-------------|
@@ -86,7 +142,8 @@ curl -X POST http://localhost:8000/api/v1/meetings \
 ```
 
 **PHI redaction, audit logging, encryption, BAA, and compliance metrics** are
-library features since v0.5.0:
+available since v0.5.0 both as a Python library and via the REST endpoints
+listed above:
 
 ```python
 from meeting_notes_ai.hipaa.phi_patterns import PHIRedactor
@@ -556,7 +613,7 @@ Test coverage by release:
 - 112 v0.1.0 regression tests (transcription, extraction, export, healthcare/legal modes)
 - 163 v0.2.0 tests (DB models, JWT auth, batch processing, team CRUD, webhooks, PDF/ZIP export)
 - 70 v0.3.0 tests (share creation, listing, revocation, public access, expiry, access control)
-- 269 v0.5.0 HIPAA tests (PHI redaction, audit logging, encryption, BAA template, compliance dashboard, HIPAA config)
+- 298 v0.5.0 HIPAA tests (PHI redaction, audit logging, encryption, BAA template, compliance dashboard, HIPAA config, HIPAA REST routes)
 
 > Note: the v0.4.0 rate-limit/API-key test files (`test_ratelimit.py`,
 > `test_api_keys.py`, `test_tier_config.py`, `test_middleware.py`,
@@ -572,7 +629,8 @@ Test coverage by release:
 3. Provision a Postgres plugin (DATABASE_URL auto-injected)
 4. Set environment variables:
    - `JWT_SECRET` (required)
-   - `OPENAI_API_KEY` (required)
+   - `OPENAI_API_KEY` (required — used by `/api/v1/meetings` and `/api/v1/transcribe`)
+   - `HIPAA_MASTER_KEY` (required for `/api/v1/encryption/rotate-key` and encryption at rest)
 5. No manual migration needed — `init_db` runs on startup
 
 See `railway.toml` for service configuration.

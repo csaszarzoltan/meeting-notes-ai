@@ -55,34 +55,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   into `ComplianceSummary` (compliance score 0.0–1.0), `PHIStats`
   (chart-ready category/risk breakdown), and recent activity
 - `hipaa.middleware` — FastAPI dependencies (`get_phi_redactor`,
-  `get_audit_logger`, `get_encryption_service`) ready for route wiring
+  `get_audit_logger`, `get_encryption_service`) as process-wide singletons
+
+#### HIPAA REST Endpoints (`routes/hipaa.py`)
+
+All HIPAA features are now wired into the FastAPI app (registered in
+`main.py`). Data endpoints require a Bearer JWT (the standard
+`get_current_user` dependency); `GET /api/v1/compliance/dashboard/html`
+serves the Chart.js dashboard page unauthenticated.
+
+- `POST /api/v1/transcribe` — multipart audio upload with optional
+  `language` and `phi_redaction` (bool); returns `{text, language,
+  duration_seconds, segments[], phi_redacted, redaction_matches}`; requires
+  `OPENAI_API_KEY` (Whisper API); writes an audit entry (`action=transcribe`)
+- `GET /api/v1/audit-logs` — filterable audit query (`actor`, `action`,
+  `resource`; `limit` 1–1000, default 100), newest first
+- `GET /api/v1/audit-logs/stats` — aggregate stats (optional `since` ISO)
+- `GET /api/v1/audit-logs/export` — JSONL attachment for an ISO date range
+  (`start`, `end` required)
+- `POST /api/v1/encryption/rotate-key` — body `{new_master_key}`; re-wraps
+  all tenant DEKs; requires `HIPAA_MASTER_KEY` (503 when missing)
+- `POST /api/v1/compliance/baa/generate` — body `{org_name, ba_name,
+  signed_by}`; stores a HIPAA §164.504(e) agreement immutably, returns the
+  rendered markdown
+- `GET /api/v1/compliance/dashboard` — combined `{summary, phi_stats,
+  activity}`
+- `GET /api/v1/compliance/dashboard/summary` — compliance summary card
+- `GET /api/v1/compliance/dashboard/phi-stats` — PHI detection statistics
+- `GET /api/v1/compliance/dashboard/activity` — recent audit activity
+  (`limit` 1–500, default 50)
+- `GET /api/v1/compliance/dashboard/html` — serves
+  `templates/dashboard.html.jinja` (Chart.js page fetching the three data
+  endpoints above)
 
 ### Changed
 
 - Version bumped `0.4.0` → `0.5.0`
-- `README.md` — HIPAA section rewritten to document the library API (the
-  v0.4.0 entry previously listed `/api/v1/hipaa/*` REST endpoints that were
-  never implemented); added badges, healthcare-mode getting started,
-  examples links, verified config table
+- `README.md` — HIPAA section rewritten to document the library API and the
+  wired REST endpoints (endpoint table, curl examples, auth/env requirements);
+  added badges, healthcare-mode getting started, examples links, verified
+  config table
 - `docs/HIPAA_MODE.md` — rewritten from TODO scaffolding to a full guide
   (PHI redaction config, audit log interpretation, encryption key
-  management, BAA usage, dashboard interpretation, config reference,
-  troubleshooting, compliance checklist)
+  management, BAA usage, dashboard interpretation, REST API reference with
+  request/response examples, config reference, troubleshooting, compliance
+  checklist)
 - `examples/` — new runnable scripts: `hipaa_phi_redaction.py`,
   `hipaa_audit_logs.py`, `hipaa_rotate_key.py`, `hipaa_baa_generate.py`,
-  `hipaa_compliance_dashboard.py` (all verified with the repo venv)
+  `hipaa_compliance_dashboard.py` (library API) and
+  `hipaa_rest_endpoints.py` (full REST surface via TestClient; all verified
+  with the repo venv)
 - `CHANGELOG.md` — v0.4.0 entry corrected: it previously claimed REST
   endpoints that were never implemented; HIPAA features ship as a library
-  in this release
+  plus a wired REST surface in this release
 
 ### Breaking changes
 
-- **No `/api/v1/hipaa/*` HTTP endpoints in this release.** The v0.4.0
-  changelog entry listed REST endpoints (scan/redact/audit-log/encryption/
-  baa/compliance) that never existed in the codebase — they are not part of
-  v0.5.0 either. HIPAA features are consumed via the Python library API;
-  wire the `hipaa.middleware` FastAPI dependencies into your own routes to
-  expose them over HTTP.
+- **The canonical HIPAA paths are `/api/v1/transcribe`, `/api/v1/audit-logs*`,
+  `/api/v1/encryption/rotate-key`, and `/api/v1/compliance/*`.** The
+  analysis-brief `/api/v1/hipaa/*` paths from the v0.4.0 changelog entry
+  (scan/redact/audit-log/encryption/baa/compliance) were never implemented
+  and are not part of v0.5.0.
+- `POST /api/v1/meetings` does **not** redact PHI automatically — use
+  `POST /api/v1/transcribe` with `phi_redaction=true`, or the library API.
 - `HIPAAConfig.load()` returns defaults — env-var overrides are not
   implemented; configure via the dataclass constructor.
 - LLM PHI validation (`hipaa.llm_validator`) is a stub in this release
@@ -92,10 +127,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Tests
 
-- 269 HIPAA tests passing across 7 files: `test_phi_redaction` (52),
+- 298 HIPAA tests passing across 8 files: `test_phi_redaction` (52),
   `test_audit_logging` (38), `test_encryption` (39), `test_baa_template`
   (23), `test_compliance_dashboard` (43), `test_hipaa_config` (36),
-  `test_dashboard` (38)
+  `test_dashboard` (38), `test_hipaa_routes` (29)
 - Pre-existing failures (85) in the v0.4.0 rate-limit/API-key chain are
   unchanged and unrelated to HIPAA
 
