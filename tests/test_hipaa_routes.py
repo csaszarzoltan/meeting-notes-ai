@@ -57,7 +57,13 @@ def _make_logger(log_dir, instance_id: str = "apitest") -> AuditLogger:
 
 
 class FakeTranscriber:
-    """Fake TranscriptionService that returns a canned transcript."""
+    """Fake TranscriptionService that returns a canned transcript.
+
+    Returns two segments mirroring the N1 probe shape: the PHI is split
+    across segment boundaries ("Patient John Smith called" / "with SSN
+    123-45-6789.") so a regression test can assert no segment leaks
+    plaintext PHI.
+    """
 
     def __init__(self, text: str) -> None:
         self.text = text
@@ -72,7 +78,14 @@ class FakeTranscriber:
             text=self.text,
             language=language or "en",
             duration_seconds=1.5,
-            segments=[TranscriptSegment(start=0.0, end=1.5, text=self.text)],
+            segments=[
+                TranscriptSegment(
+                    start=0.0, end=1.0, text="Patient John Smith called"
+                ),
+                TranscriptSegment(
+                    start=1.0, end=1.5, text="with SSN 123-45-6789."
+                ),
+            ],
         )
 
 
@@ -174,6 +187,19 @@ class TestTranscribe:
         assert "[REDACTED]" in data["text"]
         assert data["phi_redacted"] is True
         assert data["redaction_matches"] >= 1
+
+        # N1 regression: no segments[].text may carry plaintext PHI.
+        # The audit entry certifies phi_classification="phi" — the response
+        # must not contradict that by leaking identifiers in segments.
+        segment_texts = [s.get("text", "") for s in data["segments"]]
+        assert segment_texts, "expected segments in response"
+        for seg_text in segment_texts:
+            assert "123-45-6789" not in seg_text, (
+                f"SSN leaked through segment text: {seg_text!r}"
+            )
+            assert "John Smith" not in seg_text, (
+                f"patient name leaked through segment text: {seg_text!r}"
+            )
 
     async def test_transcribe_without_redaction_returns_raw(self, client, auth_headers):
         from meeting_notes_ai.routes.hipaa import get_transcription_service

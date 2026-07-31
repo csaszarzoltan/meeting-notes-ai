@@ -169,6 +169,7 @@ async def transcribe_audio(
         raise HTTPException(status_code=500, detail="Transcription failed")
 
     text = result.text
+    segments = list(result.segments)
     phi_redacted = False
     redaction_matches = 0
     if phi_redaction:
@@ -176,6 +177,18 @@ async def transcribe_audio(
         text = redacted_text
         phi_redacted = True
         redaction_matches = len(matches)
+        # N1: segments must never leak plaintext PHI — redact every segment
+        # the same way the top-level text is redacted. Without this the
+        # response certifies phi_redaction=true while segments[] still
+        # carries the original patient identifiers.
+        redacted_segments: list[TranscriptSegment] = []
+        for segment in segments:
+            seg_text, seg_matches = redactor.redact(segment.text)
+            redaction_matches += len(seg_matches)
+            redacted_segments.append(
+                segment.model_copy(update={"text": seg_text})
+            )
+        segments = redacted_segments
 
     await audit.log(
         AuditEntry(
@@ -196,7 +209,7 @@ async def transcribe_audio(
         text=text,
         language=result.language,
         duration_seconds=result.duration_seconds,
-        segments=result.segments,
+        segments=segments,
         phi_redacted=phi_redacted,
         redaction_matches=redaction_matches,
     )
