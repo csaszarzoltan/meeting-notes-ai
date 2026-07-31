@@ -29,7 +29,7 @@ class ComplianceSummary:
     audit_entries_30d: int = 0
     overall_compliance_score: float = 0.0  # 0.0 - 1.0
     last_audit_entry: str | None = None
-    encryption_health: str = "healthy"      # healthy, degraded, unhealthy
+    encryption_health: str = "healthy"  # healthy, degraded, unhealthy, unprovisioned
 
 
 @dataclass
@@ -87,8 +87,12 @@ class ComplianceService:
                 logger.exception("compliance dashboard: audit stats failed")
 
         enc_keys = 0
-        enc_health = "healthy"
+        # S9: a wired service with no provisioned keys must not report
+        # "healthy" — only a corrupt/unavailable store is "degraded", a
+        # wired but empty registry is "unprovisioned", and "healthy" is
+        # reserved for services with at least one key.
         encryption_service = getattr(self, "_encryption_service", None)
+        enc_health = "unprovisioned" if encryption_service is not None else "degraded"
         if encryption_service is not None:
             try:
                 if hasattr(encryption_service, "list_key_info"):
@@ -104,15 +108,16 @@ class ComplianceService:
                 store_error = getattr(encryption_service, "_store_error", None)
                 if store_error:
                     enc_health = "degraded"
+                elif enc_keys == 0:
+                    enc_health = "unprovisioned"
+                else:
+                    enc_health = "healthy"
             except Exception:
                 enc_health = "degraded"
                 enc_keys = 0
                 logger.exception(
                     "compliance dashboard: encryption service unavailable"
                 )
-        elif getattr(self, "_encryption_service", None) is None:
-            # No encryption service wired at all — surface it, don't lie.
-            enc_health = "degraded"
 
         baa_count = 0
         baa_service = getattr(self, "_baa_service", None)
@@ -207,7 +212,15 @@ class ComplianceService:
                 1 for info in keys.values() if getattr(info, "is_active", True)
             )
             store_error = getattr(encryption_service, "_store_error", None)
-            status = "degraded" if store_error else "healthy"
+            # S9: "healthy" requires at least one key; an empty registry
+            # is "unprovisioned" (not lying about readiness), and a
+            # corrupt/unreadable store stays "degraded".
+            if store_error:
+                status = "degraded"
+            elif total == 0:
+                status = "unprovisioned"
+            else:
+                status = "healthy"
             payload: dict[str, Any] = {
                 "status": status,
                 "total_keys": total,

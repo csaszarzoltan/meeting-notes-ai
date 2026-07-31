@@ -283,3 +283,28 @@ class TestEncryptionServiceBehavioral:
         """_generate_dek() should return 32 random bytes."""
         dek = svc._generate_dek()
         assert isinstance(dek, bytes) and len(dek) == 32
+
+    @pytest.mark.asyncio
+    async def test_store_error_cleared_after_successful_save(
+        self, tmp_path, monkeypatch
+    ):
+        """S12: a corrupt store degrades the service, and a successful
+        save (recovery cycle) clears the sticky error — the dashboard
+        must not stay degraded until process restart."""
+        from pathlib import Path
+
+        from meeting_notes_ai.hipaa.config import HIPAAConfig
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        store_path = Path(tmp_path) / ".meeting-notes-ai" / "key_store.json"
+        store_path.parent.mkdir(parents=True, exist_ok=True)
+        store_path.write_text("{ not valid json", encoding="utf-8")
+
+        svc = EncryptionService(HIPAAConfig(encryption_enabled=True), lambda: None)
+        assert svc._store_error is not None  # corrupt store surfaced, not silent
+
+        await svc.generate_tenant_key("tenant1")  # triggers _save_key_store
+
+        assert svc._store_error is None  # recovery cycle cleared degradation
+        assert store_path.exists()
+        assert "tenant1" in svc._key_meta

@@ -151,6 +151,11 @@ class EncryptionService:
         crash mid-write cannot corrupt the store and the file never
         inherits a permissive umask. Failures are logged loudly — the
         persistence layer must not fail silently.
+
+        A successful save also clears any previously recorded
+        ``_store_error`` (S12): once the on-disk store matches the
+        in-memory registry, the corrupt-store degradation is resolved
+        and the dashboard can recover without a process restart.
         """
         try:
             with self._lock:
@@ -179,6 +184,8 @@ class EncryptionService:
                     except OSError:
                         pass
                     raise
+            # S12: store on disk now matches memory — recovery cycle done.
+            self._store_error = None
         except Exception:
             logger.error(
                 "Failed to persist key store %s — wrapped DEKs may be "

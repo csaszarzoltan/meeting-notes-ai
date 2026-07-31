@@ -403,3 +403,139 @@ class TestAuditLoggerBehavioral:
         # All 30 entries should be readable
         entries = await logger.query(limit=100)
         assert len(entries) == 30
+
+
+class TestAuditLoggerTailRobustness:
+    """S11/S10/dead-config regressions for the append path."""
+
+    @pytest.fixture
+    def logger(self, tmp_path):
+        from meeting_notes_ai.hipaa.audit_logger import AuditLogger
+        from meeting_notes_ai.hipaa.config import HIPAAConfig
+
+        return AuditLogger(
+            config=HIPAAConfig(audit_log_dir=str(tmp_path / "audit"))
+        )
+
+    @pytest.fixture
+    def entry_factory(self):
+        from meeting_notes_ai.hipaa.audit_logger import AuditEntry
+
+        def make(ts: str, actor: str = "user-42") -> AuditEntry:
+            return AuditEntry(
+                timestamp=ts,
+                actor=actor,
+                action="phi.scan",
+                resource="meeting:abc-123",
+                phi_classification="high",
+                outcome="success",
+            )
+
+        return make
+
+    @pytest.mark.asyncio
+    async def test_partial_tail_line_does_not_swallow_next_entry(
+        self, logger, entry_factory
+    ):
+        """S11: a partial trailing line (crash mid-write) must not eat the
+        next entry — it survives on its own line, the partial line is
+        counted as corrupt, and the hash chain stays unbroken."""
+        await logger.log(entry_factory("2026-07-30T12:00:00Z"))
+        log_dir = Path(logger.config.audit_log_dir)
+        active = sorted(log_dir.glob("audit-*.jsonl"))[-1]
+        # Simulate a crash mid-write: partial JSON with NO trailing newline.
+        with open(active, "a", encoding="utf-8") as f:
+            f.write('{"timestamp": "2026-07-30T12:00:01Z", "actor": "pa')
+
+        await logger.log(entry_factory("2026-07-30T12:00:02Z"))
+
+        entries = await logger.query(limit=100)
+        assert len(entries) == 2  # entry 2 survived, not glued away
+        assert any(e.timestamp == "2026-07-30T12:00:02Z" for e in entries)
+        stats = await logger.get_stats()
+        assert stats["corrupt_lines"] == 1
+        assert stats["tampered_lines"] == 0  # chain intact past the gap
+
+    @pytest.mark.asyncio
+    async def test_partial_tail_only_chain_recovers_from_last_valid(
+        self, logger, entry_factory, tmp_path
+    ):
+        """S11: a fresh instance appending after a crash chains from the
+        last intact entry (not genesis), so the chain survives the gap."""
+        await logger.log(entry_factory("2026-07-30T12:00:00Z"))
+        log_dir = Path(logger.config.audit_log_dir)
+        active = sorted(log_dir.glob("audit-*.jsonl"))[-1]
+        with open(active, "a", encoding="utf-8") as f:
+            f.write('{"timestamp": "2026-07-30T12:00:01Z", "actor": "pa')
+
+        # Fresh instance (in-memory head unknown) must tail-read and
+        # skip the partial line when computing the next chain link.
+        from meeting_notes_ai.hipaa.audit_logger import AuditLogger
+        from meeting_notes_ai.hipaa.config import HIPAAConfig
+
+        fresh = AuditLogger(
+            config=HIPAAConfig(audit_log_dir=str(tmp_path / "audit"))
+        )
+        await fresh.log(entry_factory("2026-07-30T12:00:02Z"))
+
+        stats = await fresh.get_stats()
+        assert stats["corrupt_lines"] == 1
+        assert stats["tampered_lines"] == 0
+        assert stats["total_entries"] == 2
+
+    @pytest.mark.asyncio
+    async def test_append_reuses_in_memory_chain_head(
+        self, logger, entry_factory, monkeypatch
+    ):
+        """S10: once the in-memory chain head is known, appends must not
+        re-read the file to find it (no O(n^2) tail scans)."""
+        import meeting_notes_ai.hipaa.audit_logger as audit_module
+
+        calls = {"n": 0}
+        orig = audit_module.AuditLogger._tail_chain_hash
+
+        def spy(path):
+            calls["n"] += 1
+            return orig(path)
+
+        monkeypatch.setattr(logger, "_tail_chain_hash", spy)
+
+        await logger.log(entry_factory("2026-07-30T12:00:00Z"))  # 1 tail read
+        await logger.log(entry_factory("2026-07-30T12:00:01Z"))  # in-memory
+        await logger.log(entry_factory("2026-07-30T12:00:02Z"))  # in-memory
+        assert calls["n"] == 1
+
+    @pytest.mark.asyncio
+    async def test_auto_rotation_enforces_max_bytes(self, tmp_path):
+        """Dead-config fix: audit_log_max_bytes now triggers rotation on
+        the write path; all entries stay queryable with an intact chain."""
+        from meeting_notes_ai.hipaa.audit_logger import (
+            AuditEntry,
+            AuditLogger,
+        )
+        from meeting_notes_ai.hipaa.config import HIPAAConfig
+
+        logger = AuditLogger(
+            config=HIPAAConfig(
+                audit_log_dir=str(tmp_path / "audit"),
+                audit_log_max_bytes=200,
+            )
+        )
+        for i in range(5):
+            await logger.log(
+                AuditEntry(
+                    timestamp=f"2026-07-30T12:{i:02d}:00Z",
+                    actor="rot-test",
+                    action="test",
+                    resource="r",
+                    phi_classification="none",
+                    outcome="success",
+                )
+            )
+        log_dir = Path(logger.config.audit_log_dir)
+        files = sorted(p for p in log_dir.glob("audit-*.jsonl") if p.is_file())
+        assert len(files) >= 2  # at least one archive + active file
+        stats = await logger.get_stats()
+        assert stats["total_entries"] == 5
+        assert stats["corrupt_lines"] == 0
+        assert stats["tampered_lines"] == 0  # chain re-anchored per file

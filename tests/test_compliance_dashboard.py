@@ -14,6 +14,8 @@ from inspect import signature
 
 import pytest
 
+from meeting_notes_ai.hipaa.dashboard import ComplianceService
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Interface Tests (must PASS)
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -210,7 +212,7 @@ class TestComplianceServiceInterface:
 
     def test_get_summary_returns_compliance_summary(self):
         """get_summary returns a ComplianceSummary (type hint)."""
-        from meeting_notes_ai.hipaa.dashboard import ComplianceService, ComplianceSummary
+        from meeting_notes_ai.hipaa.dashboard import ComplianceService
 
         hints = getattr(ComplianceService.get_summary, "__annotations__", {})
         ret = hints.get("return", "")
@@ -319,7 +321,12 @@ class TestComplianceServiceBehavioral:
         assert isinstance(summary, ComplianceSummary)
         assert summary.total_phi_scans == 0
         assert summary.overall_compliance_score >= 0.0
-        assert summary.encryption_health in ("healthy", "degraded", "unhealthy")
+        assert summary.encryption_health in (
+            "healthy",
+            "degraded",
+            "unhealthy",
+            "unprovisioned",
+        )
 
     @pytest.mark.asyncio
     async def test_get_phi_stats_returns_structure(self, svc):
@@ -364,3 +371,68 @@ class TestComplianceServiceBehavioral:
         # Either both return data or 7d has fewer/same entries as 30d
         assert isinstance(stats_7d.by_date, dict)
         assert isinstance(stats_30d.by_date, dict)
+
+
+class TestEncryptionHealthLabeling:
+    """S9: encryption health labels must not overstate readiness."""
+
+    class _FakeEncryptionService:
+        """Minimal double exposing list_key_info + _store_error."""
+
+        def __init__(self, key_count: int = 0, store_error: str | None = None):
+            self._key_count = key_count
+            self._store_error = store_error
+
+        async def list_key_info(self):
+            return {f"tenant-{i}": object() for i in range(self._key_count)}
+
+    @pytest.mark.asyncio
+    async def test_zero_key_wired_service_is_unprovisioned(self):
+        """A wired EncryptionService with 0 keys must not report healthy."""
+        svc = ComplianceService(
+            encryption_service=self._FakeEncryptionService(key_count=0)
+        )
+        summary = await svc.get_summary()
+        assert summary.active_encryption_keys == 0
+        assert summary.encryption_health == "unprovisioned"
+
+    @pytest.mark.asyncio
+    async def test_wired_service_with_keys_is_healthy(self):
+        """A wired service with >= 1 key reports healthy."""
+        svc = ComplianceService(
+            encryption_service=self._FakeEncryptionService(key_count=2)
+        )
+        summary = await svc.get_summary()
+        assert summary.active_encryption_keys == 2
+        assert summary.encryption_health == "healthy"
+
+    @pytest.mark.asyncio
+    async def test_corrupt_store_stays_degraded(self):
+        """A corrupt store is degraded even with 0 usable keys."""
+        svc = ComplianceService(
+            encryption_service=self._FakeEncryptionService(
+                key_count=0, store_error="key store corrupt or unreadable"
+            )
+        )
+        summary = await svc.get_summary()
+        assert summary.encryption_health == "degraded"
+
+    @pytest.mark.asyncio
+    async def test_encryption_status_unprovisioned_when_zero_keys(self):
+        """get_encryption_status() mirrors the unprovisioned label."""
+        svc = ComplianceService(
+            encryption_service=self._FakeEncryptionService(key_count=0)
+        )
+        status = await svc.get_encryption_status()
+        assert status["status"] == "unprovisioned"
+        assert status["total_keys"] == 0
+
+    @pytest.mark.asyncio
+    async def test_encryption_status_healthy_with_keys(self):
+        """get_encryption_status() reports healthy with keys present."""
+        svc = ComplianceService(
+            encryption_service=self._FakeEncryptionService(key_count=2)
+        )
+        status = await svc.get_encryption_status()
+        assert status["status"] == "healthy"
+        assert status["total_keys"] == 2

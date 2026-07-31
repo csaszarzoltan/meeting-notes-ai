@@ -746,7 +746,7 @@ no env overrides yet).
 | `scan_timeout_ms` | `100` | Reserved scan timeout budget (not enforced in this release) |
 | `audit_log_dir` | `"data/audit_logs/"` | Audit log storage directory |
 | `audit_log_retention_days` | `2190` (6 years) | Retention window (validated `>= 1`) |
-| `audit_log_max_bytes` | `100 * 1024 * 1024` | Max single-file size (rotation hook, not enforced yet) |
+| `audit_log_max_bytes` | `100 * 1024 * 1024` | Max single-file size (enforced on the write path: auto-rotation archives the active file before the cap is exceeded) |
 | `audit_log_backup_count` | `0` | Backups to keep (`0` = unlimited) |
 | `encryption_enabled` | `True` | If `True`, missing `HIPAA_MASTER_KEY` fails fast |
 | `master_key_env_var` | `"HIPAA_MASTER_KEY"` | Env var holding the KEK seed |

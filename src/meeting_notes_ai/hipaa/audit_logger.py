@@ -70,6 +70,26 @@ def _chain_hash(prev_hash: str, data: dict[str, Any]) -> str:
     ).hexdigest()
 
 
+def _append_prefix(path: Path) -> str:
+    """Return ``"\\n"`` when *path* is non-empty and lacks a trailing newline.
+
+    S11: a crash mid-write (before fsync) can leave a partial trailing
+    line with no newline; appending the next JSON record directly would
+    glue it onto that line and the entry would be unrecoverable.
+    Prefixing the append with a newline keeps every record on its own
+    line — the partial line is still counted as corrupt on read, but no
+    entry is ever swallowed. O(1): only the last byte is inspected.
+    """
+    try:
+        if path.stat().st_size == 0:
+            return ""
+        with open(path, "rb") as f:
+            f.seek(-1, os.SEEK_END)
+            return "" if f.read(1) == b"\n" else "\n"
+    except OSError:
+        return ""
+
+
 class AuditLogger:
     """Append-only JSONL audit logger.
 
@@ -104,27 +124,34 @@ class AuditLogger:
 
     @staticmethod
     def _tail_chain_hash(path: Path) -> str | None:
-        """Return the ``_chain.hash`` of the last non-empty line, if any.
+        """Return the ``_chain.hash`` of the last valid line, if any.
 
         Used to continue the hash chain when appending to an existing
         file (e.g. a second AuditLogger instance sharing the same file).
+        Lines that fail to parse as JSON — e.g. a partial trailing line
+        left by a crash mid-write (S11) — are skipped, so the chain
+        continues from the last intact entry instead of breaking.
         """
+        last_hash: str | None = None
         try:
             with open(path, encoding="utf-8") as f:
-                last_line = None
                 for line in f:
                     line = line.strip()
-                    if line:
-                        last_line = line
-                if last_line is None:
-                    return None
-                data = json.loads(last_line)
-                chain = data.get("_chain") if isinstance(data, dict) else None
-                if isinstance(chain, dict) and isinstance(chain.get("hash"), str):
-                    return chain["hash"]
-        except (OSError, json.JSONDecodeError, TypeError):
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                    except (json.JSONDecodeError, TypeError):
+                        # Corrupt / partial line — not a chain anchor.
+                        continue
+                    chain = data.get("_chain") if isinstance(data, dict) else None
+                    if isinstance(chain, dict) and isinstance(
+                        chain.get("hash"), str
+                    ):
+                        last_hash = chain["hash"]
+        except OSError:
             return None
-        return None
+        return last_hash
 
     def _read_all(self) -> tuple[list[AuditEntry], int, int]:
         """Read every entry from all ``audit-*.jsonl`` files (incl. rotated).
@@ -235,15 +262,41 @@ class AuditLogger:
             loop = asyncio.get_running_loop()
 
             def _write() -> None:
-                with open(log_path, "a", encoding="utf-8") as f:
+                entry_data = asdict(entry)
+                record = dict(entry_data)
+
+                # S10: reuse the in-memory chain head when this instance
+                # wrote the last line — avoids re-reading the whole file
+                # on every append (O(n^2) I/O over the file's life). The
+                # tail read is only a fallback for a fresh instance that
+                # never wrote to this file yet.
+                prev_hash = self._last_chain_head
+                if prev_hash is None:
                     prev_hash = self._tail_chain_hash(log_path) or _GENESIS_HASH
-                    entry_data = asdict(entry)
-                    record = dict(entry_data)
+
+                record["_chain"] = {
+                    "prev": prev_hash,
+                    "hash": _chain_hash(prev_hash, entry_data),
+                }
+                line = json.dumps(record) + "\n"
+
+                # Enforce audit_log_max_bytes: archive the active file
+                # before the append would push it past the cap. The fresh
+                # file re-anchors its hash chain at genesis.
+                if self._auto_rotate_if_needed(
+                    log_path, len(line.encode("utf-8"))
+                ):
                     record["_chain"] = {
-                        "prev": prev_hash,
-                        "hash": _chain_hash(prev_hash, entry_data),
+                        "prev": _GENESIS_HASH,
+                        "hash": _chain_hash(_GENESIS_HASH, entry_data),
                     }
-                    f.write(json.dumps(record) + "\n")
+                    line = json.dumps(record) + "\n"
+
+                with open(log_path, "a", encoding="utf-8") as f:
+                    # S11: never glue a record onto a partial trailing
+                    # line left by a crash mid-write — prefix with a
+                    # newline when the file is non-empty and lacks one.
+                    f.write(_append_prefix(log_path) + line)
                     f.flush()
                     os.fsync(f.fileno())
                     os.chmod(log_path, 0o600)
@@ -334,6 +387,37 @@ class AuditLogger:
         return await loop.run_in_executor(None, _stats)
 
     # ── Rotation ───────────────────────────────────────────────────────────────
+
+    def _auto_rotate_if_needed(self, path: Path, line_bytes: int) -> bool:
+        """Archive *path* when appending *line_bytes* would exceed the cap.
+
+        Enforces ``audit_log_max_bytes`` on the write path (previously a
+        dead config — rotation was manual-only). Returns True when the
+        file was rotated; the caller must re-anchor the new file's hash
+        chain at genesis. ``rotate()`` remains available for manual
+        rotation. ``audit_log_max_bytes <= 0`` disables auto-rotation.
+        """
+        max_bytes = getattr(self.config, "audit_log_max_bytes", 0)
+        if max_bytes <= 0:
+            return False
+        try:
+            if not path.exists() or path.stat().st_size == 0:
+                return False
+            if path.stat().st_size + line_bytes <= max_bytes:
+                return False
+        except OSError:
+            return False
+        archive_name = (
+            f"audit-{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+            f"-{uuid.uuid4().hex[:8]}.jsonl"
+        )
+        archive_path = self._get_log_dir() / archive_name
+        try:
+            path.rename(archive_path)
+            os.chmod(archive_path, 0o600)
+        except OSError:
+            return False
+        return True
 
     async def rotate(self) -> Path:
         """Force a manual log rotation. Returns path to the archived file."""

@@ -246,7 +246,12 @@ class TestComplianceServiceBehavioralRED:
         assert result.active_baa_agreements >= 0
         assert result.audit_entries_30d >= 0
         assert 0.0 <= result.overall_compliance_score <= 1.0
-        assert result.encryption_health in ("healthy", "degraded", "unhealthy")
+        assert result.encryption_health in (
+            "healthy",
+            "degraded",
+            "unhealthy",
+            "unprovisioned",
+        )
 
     @pytest.mark.asyncio
     async def test_get_phi_stats_has_all_chart_data(self):
