@@ -264,11 +264,21 @@ class TestAuditLoggerBehavioral:
     """Behavioral tests for AuditLogger."""
 
     @pytest.fixture
-    def logger(self):
-        """Provide a default AuditLogger instance."""
-        from meeting_notes_ai.hipaa.audit_logger import AuditLogger
+    def logger(self, tmp_path):
+        """Provide an AuditLogger isolated to a per-test temp directory.
 
-        return AuditLogger()
+        B3: ``_read_all`` now globs every ``audit-*.jsonl`` in the
+        configured directory (so rotated files stay queryable). The
+        default config's shared ``data/audit_logs/`` accumulates stale
+        files across runs, which would break exact-count assertions —
+        pin the log dir to tmp_path for hermetic tests.
+        """
+        from meeting_notes_ai.hipaa.audit_logger import AuditLogger
+        from meeting_notes_ai.hipaa.config import HIPAAConfig
+
+        return AuditLogger(
+            config=HIPAAConfig(audit_log_dir=str(tmp_path / "audit"))
+        )
 
     @pytest.fixture
     def sample_entry(self):

@@ -2,11 +2,23 @@
 
 Writes immutable JSONL audit entries to the filesystem with automatic
 rotation and HIPAA-mandated tracking fields.
+
+Integrity model (B3): every line carries a ``_chain`` record with the
+previous line's hash and a SHA-256 hash over the canonical serialization
+of the entry. Each log file is an independent hash chain (first entry
+chains from a genesis hash); ``fsync`` on every write and ``0600``
+permissions make the trail durable and private. Rotated/archived files
+(matched via ``audit-*.jsonl``) remain queryable, and corrupt or
+tampered lines are counted and surfaced instead of silently dropped.
 """
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import logging
+import os
+import re
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -14,6 +26,15 @@ from pathlib import Path
 from typing import Any
 
 from meeting_notes_ai.hipaa.config import HIPAAConfig
+
+logger = logging.getLogger(__name__)
+
+# Genesis hash anchoring the start of every file's chain.
+_GENESIS_HASH = "0" * 64
+
+# Plaintext PHI guard for AuditEntry.details (S8): refuse to write obvious
+# PHI (US SSNs) into the audit trail unredacted.
+_PHI_DETAILS_RE = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
 
 
 @dataclass
@@ -31,11 +52,30 @@ class AuditEntry:
     user_agent: str = ""
 
 
+def _canonical(data: dict[str, Any]) -> str:
+    """Deterministic serialization used as the hash-chain input.
+
+    Byte-stable regardless of key insertion order, so the hash computed
+    at write time can be re-verified after a JSON round-trip on read.
+    """
+    return json.dumps(
+        data, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    )
+
+
+def _chain_hash(prev_hash: str, data: dict[str, Any]) -> str:
+    """SHA-256 of ``prev_hash + canonical(entry)``."""
+    return hashlib.sha256(
+        (prev_hash + _canonical(data)).encode("utf-8")
+    ).hexdigest()
+
+
 class AuditLogger:
     """Append-only JSONL audit logger.
 
     Writes HIPAA-compliant audit entries to a rotating JSONL file. Every
-    entry captures who, what, when, where, and outcome.
+    entry captures who, what, when, where, and outcome. Lines are hash
+    chained (SHA-256), fsynced, and stored with 0600 permissions.
     """
 
     def __init__(self, config: HIPAAConfig | None = None) -> None:
@@ -43,6 +83,11 @@ class AuditLogger:
         self.config = config or HIPAAConfig()
         self._lock = asyncio.Lock()
         self._instance_id = uuid.uuid4().hex[:8]
+        self._last_chain_head: str | None = None
+        self._last_read_stats: dict[str, int] = {
+            "corrupt_lines": 0,
+            "tampered_lines": 0,
+        }
 
     # ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -57,25 +102,101 @@ class AuditLogger:
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         return self._get_log_dir() / f"audit-{today}-{self._instance_id}.jsonl"
 
-    def _read_all(self) -> list[AuditEntry]:
-        """Read all entries from the current active JSONL file."""
+    @staticmethod
+    def _tail_chain_hash(path: Path) -> str | None:
+        """Return the ``_chain.hash`` of the last non-empty line, if any.
+
+        Used to continue the hash chain when appending to an existing
+        file (e.g. a second AuditLogger instance sharing the same file).
+        """
+        try:
+            with open(path, encoding="utf-8") as f:
+                last_line = None
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        last_line = line
+                if last_line is None:
+                    return None
+                data = json.loads(last_line)
+                chain = data.get("_chain") if isinstance(data, dict) else None
+                if isinstance(chain, dict) and isinstance(chain.get("hash"), str):
+                    return chain["hash"]
+        except (OSError, json.JSONDecodeError, TypeError):
+            return None
+        return None
+
+    def _read_all(self) -> tuple[list[AuditEntry], int, int]:
+        """Read every entry from all ``audit-*.jsonl`` files (incl. rotated).
+
+        Returns ``(entries, corrupt_lines, tampered_lines)``. Corrupt
+        lines (unparseable JSON) and tampered lines (hash-chain mismatch)
+        are counted and reported, never silently dropped.
+        """
         entries: list[AuditEntry] = []
-        current = self._current_log_path()
-        if current.exists():
+        corrupt = 0
+        tampered = 0
+        log_dir = self._get_log_dir()
+        files = sorted(
+            p for p in log_dir.glob("audit-*.jsonl") if p.is_file()
+        )
+        for path in files:
+            prev_hash = _GENESIS_HASH
             try:
-                with open(current) as f:
+                with open(path, encoding="utf-8") as f:
                     for line in f:
                         line = line.strip()
                         if not line:
                             continue
                         try:
                             data = json.loads(line)
-                            entries.append(AuditEntry(**data))
                         except (json.JSONDecodeError, TypeError):
-                            pass
-            except OSError:
-                pass
-        return entries
+                            corrupt += 1
+                            continue
+                        if not isinstance(data, dict):
+                            corrupt += 1
+                            continue
+                        chain = data.pop("_chain", None)
+                        try:
+                            entry = AuditEntry(**data)
+                        except TypeError:
+                            corrupt += 1
+                            continue
+                        if isinstance(chain, dict) and isinstance(
+                            chain.get("hash"), str
+                        ):
+                            # Verify the per-file hash chain.
+                            computed = _chain_hash(
+                                chain.get("prev", ""), data
+                            )
+                            if (
+                                chain.get("prev") == prev_hash
+                                and computed == chain["hash"]
+                            ):
+                                prev_hash = chain["hash"]
+                            else:
+                                tampered += 1
+                                continue
+                        # Legacy lines without a _chain record are accepted
+                        # but do not advance the chain.
+                        entries.append(entry)
+            except OSError as exc:
+                logger.warning(
+                    "audit log read failed for %s: %s", path, exc
+                )
+        self._last_read_stats = {
+            "corrupt_lines": corrupt,
+            "tampered_lines": tampered,
+        }
+        if corrupt or tampered:
+            logger.warning(
+                "audit log integrity: %d corrupt line(s), %d tampered "
+                "line(s) in %s",
+                corrupt,
+                tampered,
+                log_dir,
+            )
+        return entries, corrupt, tampered
 
     # ── Logging ────────────────────────────────────────────────────────────────
 
@@ -83,7 +204,9 @@ class AuditLogger:
         """Persist a single audit entry (append-only).
 
         Validates that HIPAA-mandatory fields (timestamp, actor, action,
-        resource) are populated.
+        resource) are populated and that ``details`` does not carry
+        plaintext PHI (S8). The line is hash-chained, fsynced, and the
+        file is chmod'ed 0600.
         """
         # Validate required fields
         missing = []
@@ -100,14 +223,31 @@ class AuditLogger:
                 f"Missing required fields: {', '.join(missing)}"
             )
 
+        # S8: never write plaintext PHI into the audit trail unredacted.
+        if entry.details and _PHI_DETAILS_RE.search(str(entry.details)):
+            raise ValueError(
+                "AuditEntry.details must not contain plaintext PHI (SSN)"
+            )
+
         async with self._lock:
             log_path = self._current_log_path()
             # Use a synchronous write in a thread executor to keep it simple
             loop = asyncio.get_running_loop()
 
             def _write() -> None:
-                with open(log_path, "a") as f:
-                    f.write(json.dumps(asdict(entry)) + "\n")
+                with open(log_path, "a", encoding="utf-8") as f:
+                    prev_hash = self._tail_chain_hash(log_path) or _GENESIS_HASH
+                    entry_data = asdict(entry)
+                    record = dict(entry_data)
+                    record["_chain"] = {
+                        "prev": prev_hash,
+                        "hash": _chain_hash(prev_hash, entry_data),
+                    }
+                    f.write(json.dumps(record) + "\n")
+                    f.flush()
+                    os.fsync(f.fileno())
+                    os.chmod(log_path, 0o600)
+                    self._last_chain_head = record["_chain"]["hash"]
 
             await loop.run_in_executor(None, _write)
 
@@ -122,7 +262,7 @@ class AuditLogger:
         loop = asyncio.get_running_loop()
 
         def _query() -> list[AuditEntry]:
-            all_entries = self._read_all()
+            all_entries, _, _ = self._read_all()
             if filters:
                 filtered = []
                 for e in all_entries:
@@ -148,7 +288,7 @@ class AuditLogger:
         loop = asyncio.get_running_loop()
 
         def _stats() -> dict[str, Any]:
-            all_entries = self._read_all()
+            all_entries, corrupt, tampered = self._read_all()
 
             if since:
                 try:
@@ -187,6 +327,8 @@ class AuditLogger:
                 "phi_classifications": phi_counts,
                 "earliest": timestamps[0] if timestamps else None,
                 "latest": timestamps[-1] if timestamps else None,
+                "corrupt_lines": corrupt,
+                "tampered_lines": tampered,
             }
 
         return await loop.run_in_executor(None, _stats)
@@ -206,6 +348,7 @@ class AuditLogger:
                 )
                 archive_path = self._get_log_dir() / archive_name
                 current.rename(archive_path)
+                os.chmod(archive_path, 0o600)
                 return archive_path
             # Create empty archive if nothing to rotate
             archive_name = (
@@ -214,6 +357,7 @@ class AuditLogger:
             )
             archive_path = self._get_log_dir() / archive_name
             archive_path.touch()
+            os.chmod(archive_path, 0o600)
             return archive_path
 
         return await loop.run_in_executor(None, _rotate)
@@ -225,7 +369,7 @@ class AuditLogger:
         loop = asyncio.get_running_loop()
 
         def _export() -> Path:
-            all_entries = self._read_all()
+            all_entries, _, _ = self._read_all()
             filtered = [
                 e
                 for e in all_entries
@@ -239,9 +383,10 @@ class AuditLogger:
                 export_dir
                 / f"audit-export-{start}-{end}-{uuid.uuid4().hex[:8]}.jsonl"
             )
-            with open(export_path, "w") as f:
+            with open(export_path, "w", encoding="utf-8") as f:
                 for entry in filtered:
                     f.write(json.dumps(asdict(entry)) + "\n")
+            os.chmod(export_path, 0o600)
 
             return export_path
 
