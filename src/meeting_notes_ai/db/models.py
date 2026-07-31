@@ -1,6 +1,7 @@
 """SQLAlchemy ORM models for MeetingNotesAI v0.2.0.
 
-Models: User, Team, TeamMember, Meeting, SharedLink, BatchJob, BatchFileResult, WebhookSubscription
+Models: User, Team, TeamMember, Meeting, SharedLink, BatchJob,
+BatchFileResult, WebhookSubscription, BAATemplate, BAAgreement
 """
 
 from __future__ import annotations
@@ -274,3 +275,38 @@ class WebhookSubscription(Base, TimestampMixin):
 
     # Relationships
     team: Mapped["Team"] = relationship(back_populates="webhook_subscriptions")
+
+
+# ── BAATemplate ────────────────────────────────────────────────────────────────
+
+
+class BAATemplate(Base, TimestampMixin):
+    """BAA template version stored in the database."""
+
+    __tablename__ = "baa_templates"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    version: Mapped[str] = mapped_column(String(10), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+# ── BAAgreement ────────────────────────────────────────────────────────────────
+
+
+class BAAgreement(Base, TimestampMixin):
+    """Signed BAA agreement stored immutably."""
+
+    __tablename__ = "baa_agreements"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    org_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    ba_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    effective_date: Mapped[str] = mapped_column(String(20), nullable=False)
+    signed_by: Mapped[str] = mapped_column(String(100), nullable=False)
+    content_md: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="active")

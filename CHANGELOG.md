@@ -39,7 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### BAA Template & Management (P1)
 - Jinja2-based BAA template with all HIPAA §164.504(e) required clauses
-- PDF export via weasyprint
+- PDF export via fpdf2
 - Immutable storage for signed agreements
 - API endpoints: `POST /api/v1/hipaa/baa/generate`, `GET .../baa/{id}`, `GET .../baa/{id}/export`
 
