@@ -28,6 +28,13 @@ class HIPAAConfig:
     )
 
     # Encryption
+    encryption_enabled: bool = field(
+        default_factory=lambda: os.getenv("HIPAA_ENCRYPTION_ENABLED", "true").lower()
+        == "true"
+    )
+    master_key_env_var: str = field(
+        default_factory=lambda: os.getenv("HIPAA_MASTER_KEY_ENV_VAR", "HIPAA_MASTER_KEY")
+    )
     encryption_key_rotation_days: int = field(
         default_factory=lambda: int(os.getenv("HIPAA_KEY_ROTATION_DAYS", "90"))
     )

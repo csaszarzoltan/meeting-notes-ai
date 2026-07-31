@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -99,3 +100,114 @@ class TestAppBehavioral:
         data = response.json()
         assert data["status"] == "healthy"
         assert data["version"] == "0.1.0"
+
+
+# ── Rate Limit Response Headers (P1) ──────────────────────────────────────────
+# These tests fail RED until Task 1.1 (RateLimitMiddleware + headers) is
+# implemented.  The middleware doesn't exist in v0.3.0, so no X-RateLimit-*
+# headers appear on any response and no 429 is ever returned.
+
+
+class TestRateLimitHeaders:
+    """Verify rate limit response headers (Task 1.1 — RED until P1)."""
+
+    # ── Interface tests ────────────────────────────────────────────────────
+
+    def test_200_response_includes_x_ratelimit_limit(self):
+        """Every response includes X-RateLimit-Limit header."""
+        client = TestClient(app)
+        response = client.get("/healthz")
+        assert "X-RateLimit-Limit" in response.headers
+
+    def test_200_response_includes_x_ratelimit_remaining(self):
+        """Every response includes X-RateLimit-Remaining header."""
+        client = TestClient(app)
+        response = client.get("/healthz")
+        assert "X-RateLimit-Remaining" in response.headers
+
+    def test_200_response_includes_x_ratelimit_reset(self):
+        """Every response includes X-RateLimit-Reset header."""
+        client = TestClient(app)
+        response = client.get("/healthz")
+        assert "X-RateLimit-Reset" in response.headers
+
+    def test_x_ratelimit_limit_is_int(self):
+        """X-RateLimit-Limit value is an integer."""
+        client = TestClient(app)
+        response = client.get("/healthz")
+        value = response.headers.get("X-RateLimit-Limit")
+        assert value is not None, "X-RateLimit-Limit header missing"
+        assert value.isdigit(), f"Expected integer, got {value!r}"
+
+    def test_x_ratelimit_remaining_is_int(self):
+        """X-RateLimit-Remaining value is an integer."""
+        client = TestClient(app)
+        response = client.get("/healthz")
+        value = response.headers.get("X-RateLimit-Remaining")
+        assert value is not None, "X-RateLimit-Remaining header missing"
+        assert value.isdigit(), f"Expected integer, got {value!r}"
+
+    def test_x_ratelimit_reset_is_int(self):
+        """X-RateLimit-Reset value is an integer (seconds)."""
+        client = TestClient(app)
+        response = client.get("/healthz")
+        value = response.headers.get("X-RateLimit-Reset")
+        assert value is not None, "X-RateLimit-Reset header missing"
+        assert value.isdigit(), f"Expected integer, got {value!r}"
+
+    def test_429_response_includes_retry_after(self):
+        """429 response includes Retry-After header."""
+        # Without rate limiting there is no 429 — this fails RED
+        client = TestClient(app)
+        # Force 429 by hitting a non-existent endpoint with many requests
+        for _ in range(200):
+            client.get("/healthz")
+        response = client.get("/healthz")
+        assert response.status_code == 429
+        assert "Retry-After" in response.headers
+        assert response.headers["Retry-After"].isdigit()
+
+    def test_429_response_body_shape(self):
+        """429 body has detail and retry_after_seconds keys."""
+        client = TestClient(app)
+        for _ in range(200):
+            client.get("/healthz")
+        response = client.get("/healthz")
+        assert response.status_code == 429
+        data = response.json()
+        assert "detail" in data
+        assert "retry_after_seconds" in data
+        assert isinstance(data["retry_after_seconds"], int | float)
+
+    # ── Behavioral tests (xfail until P1) ──────────────────────────────────
+
+    @pytest.mark.xfail(strict=True)
+    def test_x_ratelimit_remaining_decrements(self):
+        """X-RateLimit-Remaining decrements with each request."""
+        client = TestClient(app)
+        resp1 = client.get("/healthz")
+        remaining1 = int(resp1.headers["X-RateLimit-Remaining"])
+        resp2 = client.get("/healthz")
+        remaining2 = int(resp2.headers["X-RateLimit-Remaining"])
+        assert remaining2 < remaining1, (
+            f"Remaining did not decrement: {remaining1} → {remaining2}"
+        )
+
+    @pytest.mark.xfail(strict=True)
+    def test_x_ratelimit_reset_is_positive(self):
+        """X-RateLimit-Reset value is a positive integer."""
+        client = TestClient(app)
+        response = client.get("/healthz")
+        value = int(response.headers["X-RateLimit-Reset"])
+        assert value > 0, f"Expected positive reset seconds, got {value}"
+
+    @pytest.mark.xfail(strict=True)
+    def test_429_retry_after_is_seconds_to_next_token(self):
+        """429 Retry-After is seconds until bucket has at least 1 token."""
+        client = TestClient(app)
+        for _ in range(200):
+            client.get("/healthz")
+        response = client.get("/healthz")
+        assert response.status_code == 429
+        retry_after = int(response.headers["Retry-After"])
+        assert retry_after > 0, f"Expected positive Retry-After, got {retry_after}"
