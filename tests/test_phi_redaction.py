@@ -12,7 +12,6 @@ from __future__ import annotations
 
 from dataclasses import fields, is_dataclass
 from inspect import signature
-from typing import get_type_hints
 
 import pytest
 
@@ -421,3 +420,137 @@ class TestPHIRedactorBehavioral:
         )
         categories = {m.category for m in matches}
         assert len(categories) >= 2  # At least name + one other
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# S4 regression tests — compile-once patterns, scan timeout, zero-width rejection
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestPHICompileOnce:
+    """S4: scan() must use a precompiled pattern set, never recompile per call."""
+
+    def test_scan_does_not_recompile_patterns(self, monkeypatch):
+        """scan() performs zero re.compile calls after construction."""
+        import meeting_notes_ai.hipaa.phi_patterns as phi
+
+        calls = {"n": 0}
+        original_compile = phi.re.compile
+
+        def counting_compile(pattern, *args, **kwargs):
+            calls["n"] += 1
+            return original_compile(pattern, *args, **kwargs)
+
+        monkeypatch.setattr(phi.re, "compile", counting_compile)
+
+        redactor = phi.PHIRedactor()
+        compiles_at_init = calls["n"]
+        # Default set = 6 named patterns + the generic name pattern.
+        assert compiles_at_init >= 7
+
+        redactor.scan("Patient John Smith, SSN 123-45-6789.")
+        redactor.scan("Email jane.doe@example.com — MRN: 1234567")
+        assert calls["n"] == compiles_at_init, "scan() recompiled patterns"
+
+
+class TestPHIScanTimeout:
+    """S4: scan() must respect scan_timeout_ms and fail fast, never hang."""
+
+    def test_scan_raises_after_timeout(self, monkeypatch):
+        """A scan past scan_timeout_ms raises PHIScanTimeoutError."""
+        import meeting_notes_ai.hipaa.phi_patterns as phi
+        from meeting_notes_ai.hipaa.config import HIPAAConfig
+
+        clock = {"t": 0.0}
+
+        def fake_monotonic():
+            clock["t"] += 0.05  # 50 ms per read — far past a 1 ms budget
+            return clock["t"]
+
+        monkeypatch.setattr(phi, "_monotonic", fake_monotonic)
+        redactor = phi.PHIRedactor(config=HIPAAConfig(scan_timeout_ms=1))
+
+        with pytest.raises(phi.PHIScanTimeoutError):
+            redactor.scan("John Smith (SSN: 123-45-6789, DOB: 01/15/1980)")
+
+    def test_scan_timeout_zero_disables_guard(self, monkeypatch):
+        """scan_timeout_ms <= 0 disables the timeout guard entirely."""
+        import meeting_notes_ai.hipaa.phi_patterns as phi
+        from meeting_notes_ai.hipaa.config import HIPAAConfig
+
+        clock = {"t": 0.0}
+
+        def fake_monotonic():
+            clock["t"] += 0.05
+            return clock["t"]
+
+        monkeypatch.setattr(phi, "_monotonic", fake_monotonic)
+        redactor = phi.PHIRedactor(config=HIPAAConfig(scan_timeout_ms=0))
+
+        matches = redactor.scan("SSN 123-45-6789")
+        assert any(m.category == "ssn" for m in matches)
+
+
+class TestPHIRecompileRejectsZeroWidth:
+    """S4: _recompile must reject empty/zero-width patterns from JSON."""
+
+    def test_zero_width_patterns_are_skipped(self, tmp_path):
+        """Empty and zero-width patterns never enter the compiled set."""
+        import json
+
+        import meeting_notes_ai.hipaa.phi_patterns as phi
+        from meeting_notes_ai.hipaa.config import HIPAAConfig
+
+        patterns_file = tmp_path / "patterns.json"
+        patterns_file.write_text(
+            json.dumps(
+                {
+                    "ssn": {
+                        "pattern": r"\b\d{3}-\d{2}-\d{4}\b",
+                        "label": "SSN",
+                        "risk_level": "high",
+                    },
+                    "empty": {
+                        "pattern": "",
+                        "label": "Empty",
+                        "risk_level": "low",
+                    },
+                    "star": {
+                        "pattern": r"a*",
+                        "label": "Star",
+                        "risk_level": "low",
+                    },
+                    "group": {
+                        "pattern": r"(?:)",
+                        "label": "Empty group",
+                        "risk_level": "low",
+                    },
+                    "lookahead": {
+                        "pattern": r"(?=foo)",
+                        "label": "Lookahead",
+                        "risk_level": "low",
+                    },
+                }
+            )
+        )
+
+        redactor = phi.PHIRedactor(
+            config=HIPAAConfig(phi_patterns_path=str(patterns_file))
+        )
+
+        # Empty/zero-width patterns never enter the compiled set.
+        assert "ssn" in redactor._compiled
+        assert "empty" not in redactor._compiled
+        assert "star" not in redactor._compiled
+        assert "group" not in redactor._compiled
+        # A pure lookahead is compiled (it cannot match empty input) but
+        # its zero-width matches are skipped at runtime.
+        assert "lookahead" in redactor._compiled
+
+        matches = redactor.scan("Call 123-45-6789 about foo, aaa")
+        categories = {m.category for m in matches}
+        assert "ssn" in categories
+        assert "empty" not in categories
+        assert "star" not in categories
+        assert "group" not in categories
+        assert "lookahead" not in categories

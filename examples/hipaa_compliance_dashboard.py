@@ -18,6 +18,7 @@ Run from the repository root:
 import asyncio
 import os
 import tempfile
+from pathlib import Path
 
 from meeting_notes_ai.hipaa.audit_logger import AuditEntry, AuditLogger
 from meeting_notes_ai.hipaa.baa import BAAService
@@ -51,7 +52,11 @@ async def main() -> None:
     encryption = EncryptionService(config=HIPAAConfig())
     await encryption.generate_tenant_key("tenant-1")
 
-    baa = BAAService()
+    # File-backed store (0600 + atomic writes) so agreements survive
+    # restarts — same location convention as EncryptionService's key store.
+    baa = BAAService(
+        store_path=Path.home() / ".meeting-notes-ai" / "baa_agreements.json"
+    )
     await baa.store_agreement("Acme Health Systems", "CloudNotes Inc.", "Dr. Jane Smith")
 
     # ── Aggregate ───────────────────────────────────────────────────────────

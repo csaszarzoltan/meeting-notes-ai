@@ -7,15 +7,23 @@ This module provides template generation, PDF export, and immutable storage.
 
 from __future__ import annotations
 
+import json
+import logging
+import os
+import tempfile
+import threading
 import uuid
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from fpdf import FPDF
+from jinja2.sandbox import SandboxedEnvironment
 
 from meeting_notes_ai.hipaa.config import HIPAAConfig
+
+logger = logging.getLogger(__name__)
 
 # ── Data Models ─────────────────────────────────────────────────────────────────
 
@@ -62,12 +70,53 @@ class BAAService:
 
     All HIPAA §164.504(e) required clauses are included in the template.
     Signed agreements are stored immutably — no UPDATE after signing.
+
+    Persistence (S7): agreements are kept in memory and additionally
+    persisted to a file-backed JSON store when a ``store_path`` (or a
+    ``db_factory`` returning one) is provided — mirroring
+    :class:`~meeting_notes_ai.hipaa.encryption.EncryptionService`'s
+    key_store.json (0600 permissions + atomic writes). Without a store
+    path the service stays in-memory (agreements vanish on restart).
     """
 
-    def __init__(self, db_factory: Callable | None = None) -> None:
+    def __init__(
+        self,
+        db_factory: Callable | None = None,
+        store_path: str | Path | None = None,
+        config: Any | None = None,
+    ) -> None:
+        """Initialise the BAA service.
+
+        Args:
+            db_factory: Optional callable returning a store path
+                (``str``/``Path``) or ``None``. Consulted when
+                ``store_path`` is not given; a ``None`` result keeps the
+                service in-memory.
+            store_path: Optional path of the file-backed agreement store
+                (0600 + atomic writes). ``None`` (default) keeps the
+                service in-memory.
+            config: Optional :class:`HIPAAConfig`; defaults to
+                ``HIPAAConfig.load()``.
+        """
         self._db_factory = db_factory
-        self._config = HIPAAConfig.load()
+        self._config = config or HIPAAConfig.load()
         self._agreements: dict[str, BAAgreement] = {}
+        self._lock = threading.Lock()
+
+        if store_path is None and db_factory is not None:
+            try:
+                store_path = db_factory()
+            except Exception:
+                logger.exception(
+                    "db_factory() failed — falling back to in-memory store"
+                )
+                store_path = None
+        if store_path is not None:
+            self._store_path = Path(store_path)
+            self._store_path.parent.mkdir(parents=True, exist_ok=True)
+            self._load_store()
+        else:
+            self._store_path = None
 
     # -- Template path resolution ------------------------------------------------
 
@@ -109,13 +158,18 @@ class BAAService:
         Returns:
             Rendered markdown string with all template fields substituted.
         """
-        from jinja2 import Environment, FileSystemLoader
+        from jinja2 import FileSystemLoader
 
         template_path = self._resolve_template_path()
         template_dir = template_path.parent
         template_file = template_path.name
 
-        env = Environment(loader=FileSystemLoader(str(template_dir)))
+        env = SandboxedEnvironment(
+            loader=FileSystemLoader(str(template_dir)),
+            # S7: sandbox the environment and escape user-controlled
+            # fields — org_name/ba_name are caller input, not trusted.
+            autoescape=True,
+        )
         template = env.get_template(template_file)
         return template.render(
             org_name=org_name,
@@ -197,7 +251,95 @@ class BAAService:
         text = re.sub(r"^---+\s*$", "", text, flags=re.MULTILINE)
         return text.strip()
 
-    # -- Storage (in-memory + optional DB backend) -------------------------------
+    # -- Storage (in-memory + optional file-backed store) ------------------------
+
+    # -- File-backed persistence ------------------------------------------------
+
+    def _load_store(self) -> None:
+        """Load persisted agreements from disk (S7: restart survival).
+
+        A missing store file is a fresh start; a corrupt store is logged
+        loudly and treated as empty rather than crashing the service.
+        No-op when the service is in-memory (no store path).
+        """
+        if self._store_path is None:
+            return
+        if not self._store_path.exists():
+            return
+        try:
+            with self._lock:
+                data = json.loads(
+                    self._store_path.read_text(encoding="utf-8")
+                )
+                for ag_id, item in data.get("agreements", {}).items():
+                    self._agreements[ag_id] = BAAgreement(
+                        id=item.get("id", ag_id),
+                        org_name=item.get("org_name", ""),
+                        ba_name=item.get("ba_name", ""),
+                        effective_date=item.get("effective_date", ""),
+                        signed_by=item.get("signed_by", ""),
+                        content_md=item.get("content_md", ""),
+                        status=item.get("status", "active"),
+                    )
+        except Exception:
+            logger.error(
+                "Failed to load BAA store %s — starting with empty "
+                "agreement registry",
+                self._store_path,
+                exc_info=True,
+            )
+
+    def _save_store(self) -> None:
+        """Persist agreements to disk (0600 + atomic write).
+
+        Mirrors EncryptionService._save_key_store: temp file + fsync +
+        rename, so a crash mid-write cannot corrupt the store and the
+        file never inherits a permissive umask. No-op when the service
+        is in-memory (no store path).
+        """
+        if self._store_path is None:
+            return
+        try:
+            with self._lock:
+                data = {
+                    "agreements": {
+                        ag_id: {
+                            "id": ag.id,
+                            "org_name": ag.org_name,
+                            "ba_name": ag.ba_name,
+                            "effective_date": ag.effective_date,
+                            "signed_by": ag.signed_by,
+                            "content_md": ag.content_md,
+                            "status": ag.status,
+                        }
+                        for ag_id, ag in self._agreements.items()
+                    }
+                }
+                serialized = json.dumps(data, indent=2)
+                fd, tmp_name = tempfile.mkstemp(
+                    prefix="baa_store.", suffix=".tmp",
+                    dir=str(self._store_path.parent),
+                )
+                try:
+                    with os.fdopen(fd, "w", encoding="utf-8") as f:
+                        f.write(serialized)
+                        f.flush()
+                        os.fsync(f.fileno())
+                    os.chmod(tmp_name, 0o600)
+                    os.replace(tmp_name, self._store_path)
+                except BaseException:
+                    try:
+                        os.unlink(tmp_name)
+                    except OSError:
+                        pass
+                    raise
+        except Exception:
+            logger.error(
+                "Failed to persist BAA store %s — agreements may be "
+                "lost on restart",
+                self._store_path,
+                exc_info=True,
+            )
 
     async def store_agreement(
         self,
@@ -232,6 +374,9 @@ class BAAService:
             status="active",
         )
         self._agreements[agreement_id] = agreement
+        # Persist immediately so a crash/restart cannot lose the signed
+        # agreement (S7). No-op when no store path is configured.
+        self._save_store()
         return agreement_id
 
     async def get_agreement(self, agreement_id: str) -> BAAgreement:

@@ -341,3 +341,98 @@ class TestBAAServiceBehavioral:
         """Once stored, an agreement should not be updatable (no update method)."""
         assert not hasattr(BAAService, "update_agreement")
         assert not hasattr(BAAService, "modify_agreement")
+
+
+# ── S7 regression tests — persistence + Jinja sandbox ─────────────────────────
+
+
+class TestBAAPersistence:
+    """S7: store_agreement/list_agreements survive service re-instantiation."""
+
+    @pytest.mark.asyncio
+    async def test_store_and_list_survive_reinstantiation(self, tmp_path):
+        """Agreements persisted via store_path outlive the service instance."""
+        store = tmp_path / "baa_agreements.json"
+        svc1 = BAAService(store_path=store)
+        ag_id = await svc1.store_agreement(
+            org_name="Persistence Clinic",
+            ba_name="Persist BA",
+            signed_by="admin@persist.com",
+        )
+
+        svc2 = BAAService(store_path=store)
+        summaries = await svc2.list_agreements()
+        assert any(s.id == ag_id for s in summaries)
+
+        agreement = await svc2.get_agreement(ag_id)
+        assert agreement.org_name == "Persistence Clinic"
+        assert agreement.ba_name == "Persist BA"
+        assert agreement.status == "active"
+
+    @pytest.mark.asyncio
+    async def test_store_file_is_0600(self, tmp_path):
+        """The persisted store is written with 0600 permissions."""
+        import stat
+
+        store = tmp_path / "baa_agreements.json"
+        svc = BAAService(store_path=store)
+        await svc.store_agreement(
+            org_name="Perm Clinic", ba_name="Perm BA", signed_by="signer@x.com"
+        )
+        assert store.exists()
+        assert stat.S_IMODE(store.stat().st_mode) == 0o600
+
+    @pytest.mark.asyncio
+    async def test_db_factory_supplies_store_path(self, tmp_path):
+        """db_factory is used to resolve the persistence store."""
+        store = tmp_path / "via_factory.json"
+        svc1 = BAAService(db_factory=lambda: store)
+        ag_id = await svc1.store_agreement(
+            org_name="Factory Clinic", ba_name="Factory BA", signed_by="f@x.com"
+        )
+
+        svc2 = BAAService(db_factory=lambda: store)
+        assert any(s.id == ag_id for s in await svc2.list_agreements())
+
+    @pytest.mark.asyncio
+    async def test_bare_service_stays_in_memory(self):
+        """Without a store path the service must not persist (backward compat)."""
+        svc1 = BAAService()
+        ag_id = await svc1.store_agreement(
+            org_name="Mem Clinic", ba_name="Mem BA", signed_by="m@x.com"
+        )
+
+        svc2 = BAAService()
+        assert not any(s.id == ag_id for s in await svc2.list_agreements())
+
+
+class TestBAASandbox:
+    """S7: Jinja environment is sandboxed and user input is escaped."""
+
+    @pytest.mark.asyncio
+    async def test_jinja_environment_is_sandboxed(self, tmp_path):
+        """Dangerous template attribute access raises SecurityError."""
+        from jinja2.exceptions import SecurityError
+
+        from meeting_notes_ai.hipaa.config import HIPAAConfig
+
+        tpl = tmp_path / "evil.md.jinja"
+        tpl.write_text("Covered Entity: {{ org_name }} {{ ''.__class__.__mro__ }}")
+        svc = BAAService(config=HIPAAConfig(baa_template_path=str(tpl)))
+        with pytest.raises(SecurityError):
+            await svc.generate_template("Clinic", "BA", "2026-08-01")
+
+    @pytest.mark.asyncio
+    async def test_template_escapes_user_input(self, tmp_path):
+        """org_name/ba_name are HTML-escaped in the rendered output."""
+        from meeting_notes_ai.hipaa.config import HIPAAConfig
+
+        tpl = tmp_path / "escape.md.jinja"
+        tpl.write_text("Covered Entity: {{ org_name }} / BA: {{ ba_name }}")
+        svc = BAAService(config=HIPAAConfig(baa_template_path=str(tpl)))
+        out = await svc.generate_template(
+            '<script>alert("x")</script>', "A & B", "2026-08-01"
+        )
+        assert "<script>" not in out
+        assert "&lt;script&gt;alert(&#34;x&#34;)&lt;/script&gt;" in out
+        assert "A &amp; B" in out

@@ -44,8 +44,9 @@ from meeting_notes_ai.models import TranscriptSegment
 router = APIRouter(tags=["hipaa"])
 
 # ── Module-level singletons ─────────────────────────────────────────────────────
-# BAAService keeps agreements in memory; a per-request instance would lose them
-# between calls, so the router holds one process-wide instance.
+# BAAService is a process-wide singleton whose agreements are persisted to
+# ~/.meeting-notes-ai/baa_agreements.json (S7) — a per-request instance would
+# lose the in-memory cache between calls.
 
 _baa_service: Any | None = None
 
@@ -61,7 +62,11 @@ def _get_baa_service() -> Any:
     if _baa_service is None:
         from meeting_notes_ai.hipaa.baa import BAAService
 
-        _baa_service = BAAService()
+        # Persist signed agreements to disk so they survive restarts
+        # (S7); the store lives next to EncryptionService's key_store.json.
+        _baa_service = BAAService(
+            store_path=Path.home() / ".meeting-notes-ai" / "baa_agreements.json"
+        )
     return _baa_service
 
 

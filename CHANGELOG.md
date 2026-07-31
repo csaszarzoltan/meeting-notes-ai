@@ -146,8 +146,10 @@ serves the Chart.js dashboard page unauthenticated.
   implemented; configure via the dataclass constructor.
 - LLM PHI validation (`hipaa.llm_validator`) is a stub in this release
   (confirms regex matches, never calls an external LLM).
-- Key store (`EncryptionService`) and BAA agreements (`BAAService`) are
-  in-memory; `db_factory` is accepted but unused — persistence is planned.
+- `BAAService()` with no `store_path`/`db_factory` stays in-memory —
+  agreements vanish on restart; pass a store path to persist. The REST
+  route and example persist to `~/.meeting-notes-ai/baa_agreements.json`
+  (0600 + atomic writes, mirroring `EncryptionService`'s `key_store.json`)
 
 ### Tests
 

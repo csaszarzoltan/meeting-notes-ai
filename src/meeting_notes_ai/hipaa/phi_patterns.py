@@ -7,12 +7,16 @@ redaction modes.
 from __future__ import annotations
 
 import json
+import logging
 import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
 from meeting_notes_ai.hipaa.config import HIPAAConfig
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -78,6 +82,28 @@ DEFAULT_PHI_PATTERNS: dict[str, dict[str, Any]] = {
 }
 
 
+# Generic capitalized-name pattern (FirstName LastName). Compiled once at
+# load/reconfigure time — scan() must never recompile it per call (S4).
+_GENERIC_NAME_PATTERN = r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b"
+
+
+class PHIScanTimeoutError(RuntimeError):
+    """Raised when a PHI scan exceeds ``HIPAAConfig.scan_timeout_ms``.
+
+    The scan aborts fast instead of hanging the request path. It raises
+    rather than returning a silently partial redaction, because an
+    incomplete redaction could leak PHI to the caller.
+    """
+
+
+def _monotonic() -> float:
+    """Return a monotonic clock reading in seconds.
+
+    Module-level so tests can inject a fake clock.
+    """
+    return time.monotonic()
+
+
 class PHIRedactor:
     """Configurable PHI redactor backed by a regex pattern registry.
 
@@ -119,26 +145,75 @@ class PHIRedactor:
         self._recompile()
 
     def _recompile(self) -> None:
-        """Recompile all regex patterns."""
+        """Recompile all regex patterns.
+
+        Empty and zero-width patterns (which would match at every
+        position and flood the scan) are rejected and skipped with a
+        warning — they never enter ``_compiled`` so they can never run.
+        The generic capitalized-name pattern is compiled here too, so
+        scan() never recompiles it per call (S4).
+        """
         self._compiled = {}
         for name, info in self._patterns.items():
+            pattern = info["pattern"]
+            if not pattern:
+                logger.warning(
+                    "Skipping PHI pattern %r: empty pattern string", name
+                )
+                continue
             try:
-                self._compiled[name] = re.compile(info["pattern"])
+                compiled = re.compile(pattern)
             except re.error:
-                pass
+                logger.warning(
+                    "Skipping PHI pattern %r: invalid regex %r", name, pattern
+                )
+                continue
+            if compiled.match("") is not None:
+                # Zero-width (e.g. "a*", "(?=foo)") — matches at every
+                # position; reject to avoid match floods / stalls.
+                logger.warning(
+                    "Skipping PHI pattern %r: zero-width pattern %r",
+                    name, pattern,
+                )
+                continue
+            self._compiled[name] = compiled
+        self._generic_name_pattern = re.compile(_GENERIC_NAME_PATTERN)
 
     # ── Scanning ───────────────────────────────────────────────────────────────
 
     def scan(self, text: str) -> list[PHIMatch]:
-        """Scan *text* for PHI and return all matches."""
+        """Scan *text* for PHI and return all matches.
+
+        Raises:
+            PHIScanTimeoutError: if the scan exceeds
+                ``HIPAAConfig.scan_timeout_ms`` (default 100 ms). The
+                scan aborts fast — it never hangs the request path.
+                ``scan_timeout_ms <= 0`` disables the guard.
+        """
         if not text:
             return []
+
+        timeout_s = self.config.scan_timeout_ms / 1000.0
+        deadline = _monotonic() + timeout_s if timeout_s > 0 else None
+
+        def _check_deadline() -> None:
+            if deadline is not None and _monotonic() >= deadline:
+                raise PHIScanTimeoutError(
+                    "PHI scan exceeded scan_timeout_ms="
+                    f"{self.config.scan_timeout_ms}"
+                )
 
         matches: list[PHIMatch] = []
 
         for name, compiled in self._compiled.items():
+            _check_deadline()
             info = self._patterns[name]
             for m in compiled.finditer(text):
+                _check_deadline()
+                if m.start() == m.end():
+                    # Zero-width match (e.g. residual lookahead) — it
+                    # cannot be PHI and would flood the match list.
+                    continue
                 match_text = m.group()
                 # For name patterns with titles, skip if it matches generic
                 # capitalized word pairs without a title prefix — handled
@@ -156,11 +231,13 @@ class PHIRedactor:
                 )
 
         # Also detect generic capitalized name pairs (FirstName LastName)
-        # that are not caught by the title-prefixed pattern.
-        name_pattern = re.compile(
-            r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b"
-        )
-        for m in name_pattern.finditer(text):
+        # that are not caught by the title-prefixed pattern. The pattern
+        # is compiled once at load/reconfigure time (S4).
+        _check_deadline()
+        for m in self._generic_name_pattern.finditer(text):
+            _check_deadline()
+            if m.start() == m.end():
+                continue  # zero-width — cannot be a name
             matched = m.group()
             # Skip if already matched by another named pattern
             already_matched = any(
@@ -218,6 +295,11 @@ class PHIRedactor:
         """Redact all PHI from *text* using the given *mode*.
 
         Returns ``(redacted_text, matches)``.
+
+        Raises:
+            PHIScanTimeoutError: propagated from :meth:`scan` when the
+                scan exceeds ``scan_timeout_ms`` — nothing is redacted
+                and the caller must not treat the input as scrubbed.
         """
         matches = self.scan(text)
         if not matches:
