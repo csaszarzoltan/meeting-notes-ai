@@ -22,6 +22,12 @@ dependencies = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+    "quick: fast unit tests (< 1s each) - run with 'pytest -m quick'",
+    "integration: integration tests (may need external services)",
+    "slow: slow tests (> 5s each) - skipped in quick suite",
+]
+addopts = "-n auto -q"
 asyncio_mode = "auto"
 
 [tool.ruff]
@@ -42,5 +48,7 @@ dev = [
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "pytest-mock>=3.15.1",
+    "pytest-xdist>=3.5",
+    "pytest-testmon>=1.4",
     "ruff>=0.5.0",
 ]

@@ -109,6 +109,30 @@ serves the Chart.js dashboard page unauthenticated.
   endpoints that were never implemented; HIPAA features ship as a library
   plus a wired REST surface in this release
 
+### Fixed
+
+- `PHIRedactor.scan()` — the regex pattern set (including the generic
+  capitalized-name pattern) is compiled once at load/reconfigure time;
+  scan() no longer recompiles patterns on every call
+- `scan()` now enforces `HIPAAConfig.scan_timeout_ms` (default 100 ms):
+  a scan past the budget raises `PHIScanTimeoutError` and aborts fast
+  instead of hanging the request path (`scan_timeout_ms <= 0` disables
+  the guard)
+- `_recompile()` rejects empty and zero-width regex patterns from the
+  patterns JSON (they would match at every position); scan() additionally
+  skips zero-width matches at runtime
+- `BAAService` — signed agreements now persist to a file-backed store
+  (0600 + atomic writes) when `store_path` (or a `db_factory` returning
+  one) is configured; the REST route and example persist to
+  `~/.meeting-notes-ai/baa_agreements.json`, so agreements survive
+  restarts
+- `BAAService.generate_template()` — Jinja2 environment is now a
+  `SandboxedEnvironment` with `autoescape=True`, so user-supplied
+  `org_name`/`ba_name`/`effective_date` values are escaped and template
+  attribute escapes raise `SecurityError`
+- Removed dead `BAATemplate`/`BAAgreement` SQLAlchemy models from
+  `db/models.py` (nothing referenced them; BAA data is file-backed)
+
 ### Breaking changes
 
 - **The canonical HIPAA paths are `/api/v1/transcribe`, `/api/v1/audit-logs*`,
@@ -131,6 +155,8 @@ serves the Chart.js dashboard page unauthenticated.
   `test_audit_logging` (38), `test_encryption` (39), `test_baa_template`
   (23), `test_compliance_dashboard` (43), `test_hipaa_config` (36),
   `test_dashboard` (38), `test_hipaa_routes` (29)
+- Test tooling: pytest-xdist parallel execution (`addopts = -n auto -q`),
+  `quick`/`integration`/`slow` markers, `pytest-testmon` dev dependency
 - Pre-existing failures (85) in the v0.4.0 rate-limit/API-key chain are
   unchanged and unrelated to HIPAA
 
