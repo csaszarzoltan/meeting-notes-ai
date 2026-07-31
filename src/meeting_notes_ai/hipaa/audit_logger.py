@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -42,6 +42,7 @@ class AuditLogger:
         """Initialise logger with optional HIPAAConfig."""
         self.config = config or HIPAAConfig()
         self._lock = asyncio.Lock()
+        self._instance_id = uuid.uuid4().hex[:8]
 
     # ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -54,7 +55,7 @@ class AuditLogger:
     def _current_log_path(self) -> Path:
         """Return the path to the current active log file."""
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        return self._get_log_dir() / f"audit-{today}.jsonl"
+        return self._get_log_dir() / f"audit-{today}-{self._instance_id}.jsonl"
 
     def _read_all(self) -> list[AuditEntry]:
         """Read all entries from the current active JSONL file."""
@@ -151,7 +152,7 @@ class AuditLogger:
 
             if since:
                 try:
-                    since_dt = datetime.fromisoformat(since)
+                    datetime.fromisoformat(since)
                     all_entries = [
                         e
                         for e in all_entries

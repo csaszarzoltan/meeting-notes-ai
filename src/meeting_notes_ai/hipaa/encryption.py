@@ -11,11 +11,10 @@ from __future__ import annotations
 import base64
 import hashlib
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-
 
 # ── Exception hierarchy ────────────────────────────────────────────────────────
 

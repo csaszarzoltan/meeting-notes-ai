@@ -267,6 +267,17 @@ async def _seed_test_data(session: AsyncSession):
         session.add(link)
 
 
+# ── HIPAA test fixtures ──────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def hipaa_config():
+    """Provide a default HIPAAConfig for HIPAA module tests."""
+    from meeting_notes_ai.hipaa.config import HIPAAConfig
+
+    return HIPAAConfig()
+
+
 # ── Existing Sample Data Fixtures ────────────────────────────────────────────────
 
 

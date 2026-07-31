@@ -4,3 +4,5 @@ __pycache__/
 .ruff_cache/
 .coverage
 .venv/
+data/audit_logs/
+*.egg-info/

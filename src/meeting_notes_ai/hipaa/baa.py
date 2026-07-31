@@ -77,8 +77,19 @@ class BAAService:
         return Path(__file__).parent / "templates"
 
     def _resolve_template_path(self) -> Path:
-        """Resolve the Jinja2 template path from config or default location."""
-        return Path(self._config.baa_template_path)
+        """Resolve the Jinja2 template path from config or default location.
+
+        If the configured path is relative, resolve it against the
+        hipaa package templates directory.
+        """
+        configured = Path(self._config.baa_template_path)
+        if configured.is_absolute() and configured.exists():
+            return configured
+        # Fall back to the bundled template inside the package
+        bundled = Path(__file__).parent / "templates" / "baa_template.md.jinja"
+        if configured.exists():
+            return configured
+        return bundled
 
     # -- Template rendering ------------------------------------------------------
 

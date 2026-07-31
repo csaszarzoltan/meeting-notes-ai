@@ -220,71 +220,16 @@ class TestComplianceServiceInterface:
         assert sig.return_annotation == "dict"
 
 
-# ── Behavioral Pre-Dev Tests (XFAIL / NotImplementedError during RED phase) ────
+# ── Behavioral Tests (GREEN phase — implemented) ───────────────────────────────
 
 
 class TestComplianceServiceBehavioralRED:
-    """Expected behaviors — all raise NotImplementedError until dev implements."""
+    """Behavioral tests for a fully implemented ComplianceService.
 
-    def test_init_raises_not_implemented(self):
-        """Instantiating ComplianceService should raise NotImplementedError (RED)."""
-        with pytest.raises(NotImplementedError):
-            ComplianceService()
-
-    def test_init_with_args_raises_not_implemented(self):
-        """Instantiating with all args should raise NotImplementedError (RED)."""
-        with pytest.raises(NotImplementedError):
-            ComplianceService(
-                audit_logger=lambda: None,
-                encryption_service=lambda: None,
-                baa_service=lambda: None,
-                phi_redactor=lambda: None,
-            )
-
-    @pytest.mark.asyncio
-    async def test_get_summary_raises_not_implemented(self):
-        """get_summary should raise NotImplementedError (RED)."""
-        with pytest.raises(NotImplementedError):
-            service = ComplianceService.__new__(ComplianceService)
-            await service.get_summary()
-
-    @pytest.mark.asyncio
-    async def test_get_phi_stats_raises_not_implemented(self):
-        """get_phi_stats should raise NotImplementedError (RED)."""
-        with pytest.raises(NotImplementedError):
-            service = ComplianceService.__new__(ComplianceService)
-            await service.get_phi_stats()
-
-    @pytest.mark.asyncio
-    async def test_get_phi_stats_with_since_raises_not_implemented(self):
-        """get_phi_stats with since param should raise NotImplementedError (RED)."""
-        with pytest.raises(NotImplementedError):
-            service = ComplianceService.__new__(ComplianceService)
-            await service.get_phi_stats(since="7d")
-
-    @pytest.mark.asyncio
-    async def test_get_recent_activity_raises_not_implemented(self):
-        """get_recent_activity should raise NotImplementedError (RED)."""
-        with pytest.raises(NotImplementedError):
-            service = ComplianceService.__new__(ComplianceService)
-            await service.get_recent_activity()
-
-    @pytest.mark.asyncio
-    async def test_get_encryption_status_raises_not_implemented(self):
-        """get_encryption_status should raise NotImplementedError (RED)."""
-        with pytest.raises(NotImplementedError):
-            service = ComplianceService.__new__(ComplianceService)
-            await service.get_encryption_status()
-
-    @pytest.mark.asyncio
-    async def test_get_baa_compliance_raises_not_implemented(self):
-        """get_baa_compliance should raise NotImplementedError (RED)."""
-        with pytest.raises(NotImplementedError):
-            service = ComplianceService.__new__(ComplianceService)
-            await service.get_baa_compliance()
-
-
-    # ── Future behavioral tests (skip during RED, activate after impl) ─────
+    RED-phase NotImplementedError markers were removed when the
+    implementation landed (a7952e5 precedent) — a working service can
+    never satisfy ``pytest.raises(NotImplementedError)``.
+    """
 
     @pytest.mark.asyncio
     async def test_get_summary_returns_all_fields(self):

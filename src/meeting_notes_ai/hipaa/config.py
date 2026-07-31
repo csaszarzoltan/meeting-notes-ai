@@ -1,56 +1,83 @@
 """HIPAA compliance configuration for MeetingNotesAI.
 
-Provides shared configuration for BAA templates, encryption,
-audit logging, and PHI redaction modules.
+Provides shared configuration for PHI redaction, audit logging, encryption,
+BAA templates, and LLM validation modules. All defaults per HIPAA §164.
 """
 
 from __future__ import annotations
 
-import os
-from dataclasses import dataclass, field
-from pathlib import Path
+from dataclasses import dataclass
 
 
 @dataclass
 class HIPAAConfig:
-    """HIPAA compliance configuration.
+    """HIPAA compliance configuration dataclass.
 
-    Settings are loaded from environment variables with sensible defaults
-    for development and testing.
+    All fields have sensible defaults for development and testing.
+    Validation ensures thresholds and retention values are in range.
     """
 
-    # BAA template path (relative to this module's templates dir)
-    baa_template_path: str = field(
-        default_factory=lambda: os.getenv(
-            "HIPAA_BAA_TEMPLATE_PATH",
-            str(Path(__file__).parent / "templates" / "baa_template.md.jinja"),
-        )
-    )
+    # ── PHI Redaction ──────────────────────────────────────────────────────────
+    phi_patterns_path: str = "hipaa/phi_patterns.json"
+    """Path to the PHI patterns JSON file (relative to app root)."""
 
-    # Encryption
-    encryption_enabled: bool = field(
-        default_factory=lambda: os.getenv("HIPAA_ENCRYPTION_ENABLED", "true").lower()
-        == "true"
-    )
-    master_key_env_var: str = field(
-        default_factory=lambda: os.getenv("HIPAA_MASTER_KEY_ENV_VAR", "HIPAA_MASTER_KEY")
-    )
-    encryption_key_rotation_days: int = field(
-        default_factory=lambda: int(os.getenv("HIPAA_KEY_ROTATION_DAYS", "90"))
-    )
+    scan_timeout_ms: int = 100
+    """Max time in milliseconds for a single scan() call."""
 
-    # Audit log retention in days
-    audit_retention_days: int = field(
-        default_factory=lambda: int(os.getenv("HIPAA_AUDIT_RETENTION_DAYS", "1825"))
-    )  # 5 years per HIPAA
+    # ── Audit Logging ──────────────────────────────────────────────────────────
+    audit_log_dir: str = "data/audit_logs/"
+    """Directory for append-only JSONL audit log files."""
 
-    # Whether PHI redaction is enforced globally
-    phi_redaction_enforced: bool = field(
-        default_factory=lambda: os.getenv("HIPAA_PHI_REDACTION", "true").lower()
-        == "true"
-    )
+    audit_log_retention_days: int = 365 * 6  # 6 years per HIPAA
+    """Number of days to retain audit log entries (HIPAA min 6 years)."""
+
+    audit_log_max_bytes: int = 100 * 1024 * 1024  # 100 MB
+    """Max size of a single audit log file before rotation."""
+
+    audit_log_backup_count: int = 0
+    """Number of backup log files to keep (0 = unlimited)."""
+
+    # ── Encryption ─────────────────────────────────────────────────────────────
+    encryption_enabled: bool = True
+    """Whether encryption at rest is enabled globally."""
+
+    master_key_env_var: str = "HIPAA_MASTER_KEY"
+    """Environment variable name holding the master key encryption key (KEK)."""
+
+    encryption_key_length: int = 32
+    """AES-256 key length in bytes (32 = 256 bits)."""
+
+    encryption_nonce_length: int = 12
+    """GCM standard nonce length in bytes (12 = 96 bits)."""
+
+    # ── BAA Template ───────────────────────────────────────────────────────────
+    baa_template_path: str = "hipaa/templates/baa_template.md.jinja"
+    """Path to the BAA Jinja2 template file."""
+
+    default_baa_effective_days: int = 365
+    """Default number of days a BAA agreement is effective."""
+
+    # ── LLM Validation ─────────────────────────────────────────────────────────
+    llm_validation_enabled: bool = True
+    """Whether LLM-based PHI validation pass is enabled."""
+
+    llm_validation_threshold: float = 0.8
+    """Confidence threshold (0.0-1.0) for LLM validation results."""
+
+    def __post_init__(self) -> None:
+        """Validate field values after initialisation."""
+        if self.llm_validation_threshold < 0.0 or self.llm_validation_threshold > 1.0:
+            raise ValueError(
+                f"llm_validation_threshold must be between 0.0 and 1.0, "
+                f"got {self.llm_validation_threshold}"
+            )
+        if self.audit_log_retention_days < 1:
+            raise ValueError(
+                f"audit_log_retention_days must be >= 1, "
+                f"got {self.audit_log_retention_days}"
+            )
 
     @classmethod
     def load(cls) -> HIPAAConfig:
-        """Load HIPAA config from environment."""
+        """Load HIPAA config from defaults (env var overrides TBD)."""
         return cls()
