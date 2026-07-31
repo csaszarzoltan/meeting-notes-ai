@@ -26,11 +26,30 @@
         .activity-table th { color: #666; font-weight: 600; }
         .loading { text-align: center; padding: 48px; color: #999; }
         .error { text-align: center; padding: 48px; color: #c62828; }
+        .token-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; background: white; border-radius: 12px; padding: 12px 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .token-bar label { font-size: 0.85rem; color: #666; }
+        .token-bar input { flex: 1; max-width: 420px; padding: 8px 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 0.9rem; }
+        .token-bar button { padding: 8px 16px; background: #1a237e; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 0.9rem; }
+        .token-bar .hint { font-size: 0.8rem; color: #999; }
+        .token-status { font-size: 0.85rem; }
+        .token-status.error { color: #c62828; }
         @media (max-width: 768px) { .charts-grid { grid-template-columns: 1fr; } }
     </style>
 </head>
 <body>
     <h1>HIPAA Compliance Dashboard</h1>
+
+    <!-- N2 fix: the data endpoints require auth, so the page needs a Bearer
+         token. Without it every fetch 401s and the dashboard can never
+         display data. The token is kept in localStorage (never sent to the
+         page server) and attached to every API request. -->
+    <div class="token-bar">
+        <label for="token-input">API Token</label>
+        <input type="password" id="token-input" placeholder="Paste your API token (JWT / bearer)" autocomplete="off" />
+        <button id="token-apply" type="button">Load</button>
+        <span class="hint">Token is stored in your browser only.</span>
+        <span id="token-status" class="token-status"></span>
+    </div>
 
     <div id="summary-grid" class="summary-grid">
         <div class="loading">Loading summary...</div>
@@ -53,90 +72,144 @@
     </div>
 
     <script>
-        // ── Load Summary ──────────────────────────────────────────────────────
-        fetch('/api/v1/compliance/dashboard/summary')
-            .then(r => r.json())
-            .then(data => {
-                const grid = document.getElementById('summary-grid');
-                grid.innerHTML = '';
-                const cards = [
-                    { label: 'PHI Scans', value: data.total_phi_scans, cls: '' },
-                    { label: 'Redactions', value: data.total_redactions, cls: '' },
-                    { label: 'Active Encryption Keys', value: data.active_encryption_keys, cls: '' },
-                    { label: 'Active BAA Agreements', value: data.active_baa_agreements, cls: '' },
-                    { label: 'Audit Entries (30d)', value: data.audit_entries_30d, cls: '' },
-                    { label: 'Compliance Score', value: (data.overall_compliance_score * 100).toFixed(0) + '%', cls: data.overall_compliance_score >= 0.7 ? 'healthy' : 'degraded' },
-                    { label: 'Encryption Health', value: data.encryption_health, cls: data.encryption_health },
-                ];
-                cards.forEach(c => {
-                    const div = document.createElement('div');
-                    div.className = 'stat-card';
-                    div.innerHTML = `<h3>${c.label}</h3><div class="value ${c.cls}">${c.value}</div>`;
-                    grid.appendChild(div);
-                });
-            })
-            .catch(() => {
-                document.getElementById('summary-grid').innerHTML = '<div class="error">Failed to load summary</div>';
+        // ── N2 fix: Bearer token handling ────────────────────────────────────
+        // The dashboard data endpoints require auth; the token is entered in
+        // the token bar, persisted in localStorage, and attached to every
+        // API request. 401 responses now prompt for a token instead of
+        // silently showing "failed to load".
+        const TOKEN_KEY = 'hipaa_dashboard_token';
+        let apiToken = localStorage.getItem(TOKEN_KEY) || '';
+
+        function authHeaders() {
+            return apiToken ? { 'Authorization': 'Bearer ' + apiToken } : {};
+        }
+
+        function showTokenStatus(msg, isError) {
+            const el = document.getElementById('token-status');
+            el.textContent = msg;
+            el.className = 'token-status' + (isError ? ' error' : '');
+        }
+
+        document.getElementById('token-apply').addEventListener('click', () => {
+            apiToken = document.getElementById('token-input').value.trim();
+            if (apiToken) {
+                localStorage.setItem(TOKEN_KEY, apiToken);
+                showTokenStatus('Token saved — reloading data…', false);
+                loadAll();
+            } else {
+                localStorage.removeItem(TOKEN_KEY);
+                showTokenStatus('Token cleared.', false);
+                loadAll();
+            }
+        });
+
+        function handleFetchError(promise, fallbackId, label) {
+            return promise.then(r => {
+                if (r.status === 401) {
+                    showTokenStatus('401 — enter a valid API token above.', true);
+                    throw new Error('unauthorized');
+                }
+                return r.json();
+            }).catch(err => {
+                if (err.message === 'unauthorized') throw err;
+                const el = document.getElementById(fallbackId);
+                if (el) el.innerHTML = `<div class="error">Failed to load ${label}</div>`;
+                throw err;
             });
+        }
+
+        function loadSummary() {
+            handleFetchError(fetch('/api/v1/compliance/dashboard/summary', { headers: authHeaders() }), 'summary-grid', 'summary')
+                .then(data => {
+                    const grid = document.getElementById('summary-grid');
+                    grid.innerHTML = '';
+                    const cards = [
+                        { label: 'PHI Scans', value: data.total_phi_scans, cls: '' },
+                        { label: 'Redactions', value: data.total_redactions, cls: '' },
+                        { label: 'Active Encryption Keys', value: data.active_encryption_keys, cls: '' },
+                        { label: 'Active BAA Agreements', value: data.active_baa_agreements, cls: '' },
+                        { label: 'Audit Entries (30d)', value: data.audit_entries_30d, cls: '' },
+                        { label: 'Compliance Score', value: (data.overall_compliance_score * 100).toFixed(0) + '%', cls: data.overall_compliance_score >= 0.7 ? 'healthy' : 'degraded' },
+                        { label: 'Encryption Health', value: data.encryption_health, cls: data.encryption_health },
+                    ];
+                    cards.forEach(c => {
+                        const div = document.createElement('div');
+                        div.className = 'stat-card';
+                        div.innerHTML = `<h3>${c.label}</h3><div class="value ${c.cls}">${c.value}</div>`;
+                        grid.appendChild(div);
+                    });
+                })
+                .catch(() => { /* handled in handleFetchError */ });
+        }
 
         // ── Load PHI Stats ────────────────────────────────────────────────────
-        fetch('/api/v1/compliance/dashboard/phi-stats')
-            .then(r => r.json())
-            .then(data => {
-                // Category pie chart
-                new Chart(document.getElementById('phiCategoryChart'), {
-                    type: 'pie',
-                    data: {
-                        labels: Object.keys(data.by_category),
-                        datasets: [{
-                            data: Object.values(data.by_category),
-                            backgroundColor: ['#1e88e5', '#43a047', '#fb8c00', '#e53935', '#8e24aa', '#00acc1', '#fdd835'],
-                        }],
-                    },
-                    options: { responsive: true, plugins: { legend: { position: 'right' } } },
-                });
+        function loadPhiStats() {
+            handleFetchError(fetch('/api/v1/compliance/dashboard/phi-stats', { headers: authHeaders() }), 'phiCategoryChart', 'PHI stats')
+                .then(data => {
+                    // Category pie chart
+                    new Chart(document.getElementById('phiCategoryChart'), {
+                        type: 'pie',
+                        data: {
+                            labels: Object.keys(data.by_category),
+                            datasets: [{
+                                data: Object.values(data.by_category),
+                                backgroundColor: ['#1e88e5', '#43a047', '#fb8c00', '#e53935', '#8e24aa', '#00acc1', '#fdd835'],
+                            }],
+                        },
+                        options: { responsive: true, plugins: { legend: { position: 'right' } } },
+                    });
 
-                // Risk level bar chart
-                new Chart(document.getElementById('phiRiskChart'), {
-                    type: 'bar',
-                    data: {
-                        labels: Object.keys(data.by_risk_level),
-                        datasets: [{
-                            label: 'PHI Matches',
-                            data: Object.values(data.by_risk_level),
-                            backgroundColor: ['#e53935', '#fb8c00', '#43a047'],
-                        }],
-                    },
-                    options: {
-                        responsive: true,
-                        scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } },
-                        plugins: { legend: { display: false } },
-                    },
-                });
-            })
-            .catch(() => {
-                document.getElementById('phiCategoryChart').parentElement.innerHTML = '<div class="error">Failed to load PHI stats</div>';
-            });
+                    // Risk level bar chart
+                    new Chart(document.getElementById('phiRiskChart'), {
+                        type: 'bar',
+                        data: {
+                            labels: Object.keys(data.by_risk_level),
+                            datasets: [{
+                                label: 'PHI Matches',
+                                data: Object.values(data.by_risk_level),
+                                backgroundColor: ['#e53935', '#fb8c00', '#43a047'],
+                            }],
+                        },
+                        options: {
+                            responsive: true,
+                            scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } },
+                            plugins: { legend: { display: false } },
+                        },
+                    });
+                })
+                .catch(() => { /* handled in handleFetchError */ });
+        }
 
         // ── Load Recent Activity ──────────────────────────────────────────────
-        fetch('/api/v1/compliance/dashboard/activity?limit=10')
-            .then(r => r.json())
-            .then(entries => {
-                const container = document.getElementById('activity-content');
-                if (!entries.length) {
-                    container.innerHTML = '<p>No activity recorded yet.</p>';
-                    return;
-                }
-                let html = '<table><thead><tr><th>Timestamp</th><th>Actor</th><th>Action</th><th>Resource</th><th>Outcome</th></tr></thead><tbody>';
-                entries.forEach(e => {
-                    html += `<tr><td>${e.timestamp || ''}</td><td>${e.actor || ''}</td><td>${e.action || ''}</td><td>${e.resource || ''}</td><td>${e.outcome || ''}</td></tr>`;
-                });
-                html += '</tbody></table>';
-                container.innerHTML = html;
-            })
-            .catch(() => {
-                document.getElementById('activity-content').innerHTML = '<div class="error">Failed to load activity</div>';
-            });
+        function loadActivity() {
+            handleFetchError(fetch('/api/v1/compliance/dashboard/activity?limit=10', { headers: authHeaders() }), 'activity-content', 'activity')
+                .then(entries => {
+                    const container = document.getElementById('activity-content');
+                    if (!entries.length) {
+                        container.innerHTML = '<p>No activity recorded yet.</p>';
+                        return;
+                    }
+                    let html = '<table><thead><tr><th>Timestamp</th><th>Actor</th><th>Action</th><th>Resource</th><th>Outcome</th></tr></thead><tbody>';
+                    entries.forEach(e => {
+                        html += `<tr><td>${e.timestamp || ''}</td><td>${e.actor || ''}</td><td>${e.action || ''}</td><td>${e.resource || ''}</td><td>${e.outcome || ''}</td></tr>`;
+                    });
+                    html += '</tbody></table>';
+                    container.innerHTML = html;
+                })
+                .catch(() => { /* handled in handleFetchError */ });
+        }
+
+        function loadAll() {
+            loadSummary();
+            loadPhiStats();
+            loadActivity();
+        }
+
+        // Auto-fill the token input from localStorage on first paint.
+        if (apiToken) {
+            document.getElementById('token-input').value = apiToken;
+        }
+        loadAll();
     </script>
 </body>
 </html>
