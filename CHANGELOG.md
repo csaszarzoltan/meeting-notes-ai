@@ -1,58 +1,120 @@
 # Changelog
 
-## [0.3.0] — 2026-07-30
+All notable changes to MeetingNotesAI are documented in this file.
 
-### Features
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-- **Meeting Sharing** — New `POST /share` endpoint generates shareable links for meetings. Supports configurable expiration (TTL) and manual revocation. Access control: only meeting owner or team members (admin/member) can share; viewers cannot.
-- **Public Link Access** — New `GET /public/shares/{token}` endpoint serves meeting data from a share token without requiring authentication. Supports optional password protection (future). Invalid, expired, and revoked tokens return 404.
-- **SharedLink DB Model** — New `SharedLink` SQLAlchemy model tracking `meeting_id`, `created_by`, `token` (UUID), `expires_at`, `revoked`, and `created_at` timestamps. Auto-expiration query support.
-- **Link Expiration & Revocation** — `DELETE /share/{share_id}` for share owners and team admins to revoke links. `expires_at` field enforces time-based expiration on public access.
-- **Share Listing** — `GET /shares` returns paginated share links scoped to the authenticated user's accessible meetings.
-- **Public Routes Module** — New `routes/public.py` module for unauthenticated endpoints (token-based meeting access), wired into the app router.
-- **Test DB Infrastructure** — `conftest.py` updated with async test DB session fixtures, engine override pattern, and isolated SQLite in-memory database for sharing and public route tests.
+---
 
-### Fixes
+## [0.4.0] — 2026-07-30
 
-- **Timezone comparison bug** in `public.py` — Fixed naive/aware datetime comparison by ensuring `expires_at` comparison uses UTC-aware `datetime.now(timezone.utc)`.
-- **Removed .venv from git tracking** — Virtual environment directory removed from version control; `.gitignore` updated.
-- **bcrypt/passlib compatibility** — bcrypt 4.x pinned to resolve passlib 1.7.4 crash on new venv installs.
-- **17 ruff auto-fixes** — Unused imports cleaned across multiple modules.
+### Added
 
-### Tests
+- **HIPAA Mode** — Full HIPAA compliance feature suite for healthcare meeting notes.
 
-- **345 tests passing** (0 failures, 0 skipped) — 70 new tests in `test_sharing.py` covering share creation, listing, revocation, public access, expiry, invalid/revoked tokens, team-scoped access control, and edge cases.
-- **All acceptance criteria verified** — Meeting Sharing, Public Links, Link Expiration & Revocation, Access Control.
+#### PHI Redaction (P0)
+- PHI Patterns Registry with 18 HIPAA identifier categories (names, SSN, DOB, phone, email, etc.)
+- Configurable redaction modes: mask, hash, truncate, annotate
+- Hot-reloadable patterns without app restart
+- API endpoints: `POST /api/v1/hipaa/scan`, `POST /api/v1/hipaa/redact`, `GET /api/v1/hipaa/patterns`
 
-### Docs
+#### LLM PHI Validation (P0)
+- LLM validation pass to catch regex misses and reduce false positives
+- Confidence scoring per match
+- Graceful degradation when LLM API is unavailable
+- Configurable toggle in HIPAAConfig
 
-- README.md updated with v0.3.0 sharing endpoints, public link usage, and authentication notes.
+#### Append-Only Audit Logging (P0)
+- JSONL-based append-only audit trail
+- HIPAA-required fields: timestamp, actor, action, resource, outcome
+- Automatic log rotation with 6-year retention
+- API endpoints: `GET /api/v1/hipaa/audit-log`, `GET /api/v1/hipaa/audit-log/stats`
 
-## [0.2.0] — 2026-07-28
+#### AES-256 Encryption at Rest (P0)
+- Envelope encryption with master KEK + per-tenant DEKs
+- AES-256-GCM authenticated encryption
+- Key rotation support
+- API endpoints: `POST /api/v1/hipaa/encryption/keys`, `GET .../keys/{tenant_id}`, `POST .../rotate`
 
-### Features
+#### BAA Template & Management (P1)
+- Jinja2-based BAA template with all HIPAA §164.504(e) required clauses
+- PDF export via weasyprint
+- Immutable storage for signed agreements
+- API endpoints: `POST /api/v1/hipaa/baa/generate`, `GET .../baa/{id}`, `GET .../baa/{id}/export`
 
-- **Database & Async SQLAlchemy Engine** — New `db/` module with async SQLAlchemy models for User, Team, TeamMember, Meeting, BatchJob, BatchFileResult, and WebhookSubscription. `init_db` with `create_all` for Railway Postgres provisioning. Alembic-ready structure.
-- **JWT Authentication** — Signup/login endpoints with bcrypt password hashing, JWT bearer tokens (24h expiry), `get_current_user` dependency, and `require_team_role` middleware for role-based access (admin/member/viewer).
-- **Batch Audio Processing** — `POST /api/v1/batches` accepts up to 10 audio files in a single multipart request. Status progression: pending → processing → completed. Per-file result tracking with partial-failure tolerance.
-- **Team Workspace CRUD** — Create team (become admin), invite members, change roles (admin/member/viewer), remove members. All meetings scoped to team.
-- **Webhook Notifications** — Register webhook URLs per team. Automatic firing on batch completion with HMAC-SHA256 payload signing and 3-retry exponential backoff.
-- **Multi-Format Batch Export** — `GET /api/v1/batches/{batch_id}/export` supporting JSON, Markdown, PDF (weasyprint), and ZIP bundle for `format=all`. Correct Content-Type headers.
-- **Route Wiring** — All 6 new routers (auth, batches, teams, webhooks) wired into `main.py` alongside existing health endpoint.
+#### Compliance Dashboard (P1)
+- REST API for compliance metrics aggregation
+- Chart.js HTML dashboard with summary cards, PHI category pie chart, risk level bar chart
+- API endpoints: `GET /api/v1/hipaa/compliance/summary`, `GET .../compliance/phi-stats`, `GET .../compliance/activity`
 
-### Fixes
+#### Thread-safe Crypto Context Cleanup (P2)
+- Fernet/AES contexts not reused across coroutines
+- Warning log when KEK env var is missing
+- Graceful degradation to "not enabled" mode
 
-- **auth.py syntax error** — `authorization: str *** Header(...)` changed to `authorization: str = Header(...)`. Would cause SyntaxError at import time.
-- **bcrypt 5.0.0 / passlib compatibility** — Pinned `bcrypt<5` (v4.3.0) to resolve passlib 1.7.4 crash. 4 auth tests were failing.
-- **Ruff lint compliance** — 17 errors in `src/` and 22 errors in `tests/` auto-fixed (unused imports, line length, import sorting).
-- **Dockerfile / railway.toml** — Fixed uv sync ordering, venv-based uvicorn path, PORT env expansion via `sh -c` wrapper.
-- **Hatchling build config** — Added `[tool.hatch.build.targets.wheel] packages` for `src/` layout.
+### Changed
 
-### Tests
+- Updated `src/meeting_notes_ai/__init__.py` version to `0.4.0`
 
-- **275 tests** passing (0 failures, 0 skipped) — all 112 v0.1.0 regression tests plus 163 new v0.2.0 tests covering DB models, JWT auth, batch processing, team CRUD, webhooks, and PDF/ZIP export.
-- **All 5 ACs verified** — Database & Auth, Batch Processing, Team Workspace, Webhooks, Batch Export.
+### Security
 
-### Docs
+- All PHI processing is now audit-logged
+- Encryption keys are never exposed in plaintext via API or logs
+- Per-tenant key isolation for multi-tenant deployments
 
-- README.md created with project overview, API endpoints, and setup instructions.
+---
+
+## [0.3.0] — 2026-07-15
+
+### Added
+
+- **Meeting Sharing** — Create shareable links with expiration and access controls
+- **Batch Processing** — Process multiple audio files in a single batch job
+- **Team Management** — Multi-user team workspaces with admin/member/viewer roles
+- **Webhook Subscriptions** — Receive batch completion notifications via webhooks
+- **Legal Mode** — Case metadata, testimony tracking, objection logging
+- `/api/v1/sharing/*` endpoints for link management
+- `/api/v1/teams/*` endpoints for team CRUD and membership
+- `/api/v1/batches/*` endpoints for batch processing
+- `/api/v1/webhooks/*` endpoints for subscription management
+- `/api/v1/legal/*` endpoints for legal mode
+
+### Changed
+
+- `MeetingMode` enum extended with `LEGAL` value
+- Pydantic models updated for LegalNote, CaseMetadata, TestimonyPoint, Objection
+- Database models added: `Team`, `TeamMember`, `SharedLink`, `BatchJob`, `BatchFileResult`, `WebhookSubscription`
+
+---
+
+## [0.2.0] — 2026-06-20
+
+### Added
+
+- **Healthcare Mode** — SOAP note formatting, HIPAA marker generation, consent tracking
+- **JWT Authentication** — Signup, login, token-based auth with 24h expiry
+- **Role-Based Access** — Admin/member/viewer team roles
+- **Export Service** — JSON, Markdown, PDF (weasyprint), ZIP export
+- **Audio Transcription** — OpenAI Whisper API integration
+- **LLM Extraction** — Structured data extraction via gpt-4o
+- `/api/v1/auth/*` endpoints for authentication
+- `/api/v1/meetings/*` endpoints for meeting CRUD
+- `/api/v1/export/*` endpoints for export operations
+
+### Changed
+
+- FastAPI application structure refactored with APIRouter pattern
+- SQLAlchemy async session pattern established
+- Test suite expanded with interface + behavioral pattern
+
+---
+
+## [0.1.0] — 2026-05-15
+
+### Added
+
+- Initial project scaffold
+- FastAPI application with basic health check endpoint
+- In-memory SQLite test database setup
+- Basic Pydantic models for meetings and transcription

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "meeting-notes-ai"
-version = "0.3.0"
+version = "0.4.0"
 description = "Micro-SaaS for meeting transcription and structured notes"
 requires-python = ">=3.11"
 license = {text = "MIT"}
@@ -41,3 +41,12 @@ select = ["E", "F", "W", "I"]
 [tool.coverage.run]
 source = ["meeting_notes_ai"]
 omit = ["*/security.py"]
+
+[dependency-groups]
+dev = [
+    "aiosqlite>=0.22.1",
+    "httpx>=0.28.1",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "pytest-mock>=3.15.1",
+]

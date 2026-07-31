@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HIPAA Compliance Dashboard — MeetingNotesAI</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f7fa; color: #333; padding: 24px; }
+        h1 { font-size: 1.8rem; margin-bottom: 24px; color: #1a237e; }
+        .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 32px; }
+        .stat-card { background: white; border-radius: 12px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .stat-card h3 { font-size: 0.85rem; color: #666; text-transform: uppercase; letter-spacing: 0.5px; }
+        .stat-card .value { font-size: 2rem; font-weight: 700; margin-top: 8px; }
+        .stat-card .value.healthy { color: #2e7d32; }
+        .stat-card .value.degraded { color: #e65100; }
+        .stat-card .value.unhealthy { color: #c62828; }
+        .charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 32px; }
+        .chart-container { background: white; border-radius: 12px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .chart-container h2 { font-size: 1rem; margin-bottom: 16px; color: #333; }
+        .activity-table { background: white; border-radius: 12px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .activity-table h2 { font-size: 1rem; margin-bottom: 16px; }
+        .activity-table table { width: 100%; border-collapse: collapse; }
+        .activity-table th, .activity-table td { text-align: left; padding: 8px 12px; border-bottom: 1px solid #eee; font-size: 0.85rem; }
+        .activity-table th { color: #666; font-weight: 600; }
+        .loading { text-align: center; padding: 48px; color: #999; }
+        .error { text-align: center; padding: 48px; color: #c62828; }
+        @media (max-width: 768px) { .charts-grid { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body>
+    <h1>HIPAA Compliance Dashboard</h1>
+
+    <div id="summary-grid" class="summary-grid">
+        <div class="loading">Loading summary...</div>
+    </div>
+
+    <div class="charts-grid">
+        <div class="chart-container">
+            <h2>PHI by Category</h2>
+            <canvas id="phiCategoryChart"></canvas>
+        </div>
+        <div class="chart-container">
+            <h2>PHI by Risk Level</h2>
+            <canvas id="phiRiskChart"></canvas>
+        </div>
+    </div>
+
+    <div class="activity-table">
+        <h2>Recent Activity</h2>
+        <div id="activity-content" class="loading">Loading activity...</div>
+    </div>
+
+    <script>
+        // ── Load Summary ──────────────────────────────────────────────────────
+        fetch('/api/v1/hipaa/compliance/summary')
+            .then(r => r.json())
+            .then(data => {
+                const grid = document.getElementById('summary-grid');
+                grid.innerHTML = '';
+                const cards = [
+                    { label: 'PHI Scans', value: data.total_phi_scans, cls: '' },
+                    { label: 'Redactions', value: data.total_redactions, cls: '' },
+                    { label: 'Active Encryption Keys', value: data.active_encryption_keys, cls: '' },
+                    { label: 'Active BAA Agreements', value: data.active_baa_agreements, cls: '' },
+                    { label: 'Audit Entries (30d)', value: data.audit_entries_30d, cls: '' },
+                    { label: 'Compliance Score', value: (data.overall_compliance_score * 100).toFixed(0) + '%', cls: data.overall_compliance_score >= 0.7 ? 'healthy' : 'degraded' },
+                    { label: 'Encryption Health', value: data.encryption_health, cls: data.encryption_health },
+                ];
+                cards.forEach(c => {
+                    const div = document.createElement('div');
+                    div.className = 'stat-card';
+                    div.innerHTML = `<h3>${c.label}</h3><div class="value ${c.cls}">${c.value}</div>`;
+                    grid.appendChild(div);
+                });
+            })
+            .catch(() => {
+                document.getElementById('summary-grid').innerHTML = '<div class="error">Failed to load summary</div>';
+            });
+
+        // ── Load PHI Stats ────────────────────────────────────────────────────
+        fetch('/api/v1/hipaa/compliance/phi-stats')
+            .then(r => r.json())
+            .then(data => {
+                // Category pie chart
+                new Chart(document.getElementById('phiCategoryChart'), {
+                    type: 'pie',
+                    data: {
+                        labels: Object.keys(data.by_category),
+                        datasets: [{
+                            data: Object.values(data.by_category),
+                            backgroundColor: ['#1e88e5', '#43a047', '#fb8c00', '#e53935', '#8e24aa', '#00acc1', '#fdd835'],
+                        }],
+                    },
+                    options: { responsive: true, plugins: { legend: { position: 'right' } } },
+                });
+
+                // Risk level bar chart
+                new Chart(document.getElementById('phiRiskChart'), {
+                    type: 'bar',
+                    data: {
+                        labels: Object.keys(data.by_risk_level),
+                        datasets: [{
+                            label: 'PHI Matches',
+                            data: Object.values(data.by_risk_level),
+                            backgroundColor: ['#e53935', '#fb8c00', '#43a047'],
+                        }],
+                    },
+                    options: {
+                        responsive: true,
+                        scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } },
+                        plugins: { legend: { display: false } },
+                    },
+                });
+            })
+            .catch(() => {
+                document.getElementById('phiCategoryChart').parentElement.innerHTML = '<div class="error">Failed to load PHI stats</div>';
+            });
+
+        // ── Load Recent Activity ──────────────────────────────────────────────
+        fetch('/api/v1/hipaa/compliance/activity?limit=10')
+            .then(r => r.json())
+            .then(entries => {
+                const container = document.getElementById('activity-content');
+                if (!entries.length) {
+                    container.innerHTML = '<p>No activity recorded yet.</p>';
+                    return;
+                }
+                let html = '<table><thead><tr><th>Timestamp</th><th>Actor</th><th>Action</th><th>Resource</th><th>Outcome</th></tr></thead><tbody>';
+                entries.forEach(e => {
+                    html += `<tr><td>${e.timestamp || ''}</td><td>${e.actor || ''}</td><td>${e.action || ''}</td><td>${e.resource || ''}</td><td>${e.outcome || ''}</td></tr>`;
+                });
+                html += '</tbody></table>';
+                container.innerHTML = html;
+            })
+            .catch(() => {
+                document.getElementById('activity-content').innerHTML = '<div class="error">Failed to load activity</div>';
+            });
+    </script>
+</body>
+</html>

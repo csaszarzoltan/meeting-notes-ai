@@ -19,7 +19,79 @@ Micro-SaaS for meeting transcription and structured notes.
 - **Database**: Async SQLAlchemy with Railway Postgres (Alembic-ready)
 - **SSRF Protection**: Built-in URL validation to prevent server-side request forgery
 
-## Quick Start
+## HIPAA Compliance Mode (v0.4.0+)
+
+MeetingNotesAI supports **HIPAA compliance mode** for healthcare meeting transcription and PHI (Protected Health Information) processing. Enable it by setting the required environment variables.
+
+### Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `HIPAA_MASTER_KEY` | — | Master Encryption Key (32-byte hex or base64) |
+| `HIPAA_PHI_PATTERNS_PATH` | `hipaa/phi_patterns.json` | Path to PHI patterns JSON |
+| `HIPAA_AUDIT_LOG_DIR` | `data/audit_logs/` | Audit log storage directory |
+| `HIPAA_AUDIT_RETENTION_DAYS` | `2190` | Log retention (6 years) |
+| `HIPAA_ENCRYPTION_ENABLED` | `true` | Enable/disable encryption at rest |
+| `HIPAA_LLM_VALIDATION_ENABLED` | `true` | Enable/disable LLM PHI validation pass |
+| `HIPAA_BAA_DEFAULT_DAYS` | `365` | Default BAA effective period in days |
+
+### Quick Start — Enabling HIPAA Mode
+
+```bash
+# Install dependencies (includes cryptography, weasyprint)
+uv sync
+
+# Set required HIPAA environment variables
+export HIPAA_MASTER_KEY=$(openssl rand -hex 32)
+export DATABASE_URL=sqlite+aiosqlite:///./meeting_notes.db
+export JWT_SECRET=your-secret-key-change-in-production
+export OPENAI_API_KEY=sk-...
+
+# Initialize database
+python -c "from meeting_notes_ai.db import init_db; import anyio; anyio.run(init_db)"
+
+# Run the server (HIPAA features auto-detect env vars on startup)
+uvicorn meeting_notes_ai.main:app --host 0.0.0.0 --port 8000
+
+# Verify HIPAA endpoints
+curl http://localhost:8000/api/v1/hipaa/scan
+```
+
+HIPAA mode activates automatically when the `HIPAA_MASTER_KEY` environment variable is set. The `/api/v1/hipaa/*` endpoints become available, including PHI redaction, audit logging, encryption management, BAA lifecycle, and the compliance dashboard.
+
+### HIPAA Features
+
+- **PHI Redaction** — Regex-based detection of 18 HIPAA identifier categories with optional LLM validation pass for higher accuracy
+- **Audit Logging** — Append-only JSONL audit trail with 6-year retention for all PHI access and processing events
+- **Encryption at Rest** — AES-256-GCM envelope encryption with per-tenant data encryption keys
+- **BAA Management** — Business Associate Agreement template generation, PDF export, and immutable storage
+- **Compliance Dashboard** — Real-time metrics via Chart.js HTML dashboard and REST API
+
+### API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/v1/hipaa/scan` | Scan text for PHI matches |
+| POST | `/api/v1/hipaa/redact` | Redact PHI from text |
+| GET | `/api/v1/hipaa/patterns` | List active PHI patterns |
+| GET | `/api/v1/hipaa/audit-log` | Query audit log entries |
+| GET | `/api/v1/hipaa/audit-log/stats` | Audit log statistics |
+| POST | `/api/v1/hipaa/encryption/keys` | Create encryption key for tenant |
+| GET | `/api/v1/hipaa/encryption/keys/{tenant_id}` | Get tenant encryption key info |
+| POST | `/api/v1/hipaa/encryption/rotate` | Rotate encryption keys |
+| POST | `/api/v1/hipaa/baa/generate` | Generate BAA from template |
+| GET | `/api/v1/hipaa/baa/{id}` | Get agreement details |
+| GET | `/api/v1/hipaa/baa/{id}/export` | Export BAA as PDF/Markdown |
+| GET | `/api/v1/hipaa/compliance/summary` | Aggregated compliance metrics |
+| GET | `/api/v1/hipaa/compliance/phi-stats` | PHI detection statistics |
+| GET | `/api/v1/hipaa/compliance/activity` | Recent audit entries |
+| GET | `/api/v1/hipaa/compliance` | HTML compliance dashboard |
+
+See [docs/HIPAA_MODE.md](docs/HIPAA_MODE.md) for the full HIPAA mode documentation.
+
+---
+
+## Quick Start (Standard Mode)
 
 ```bash
 # Install dependencies
