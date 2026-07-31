@@ -198,83 +198,96 @@ class TestBAAServiceInterface:
         assert sig.return_annotation == "list[BAAgreementSummary]"
 
 
-# ── Behavioral Pre-Dev Tests (XFAIL / NotImplementedError during RED phase) ────
+# ── Behavioral Tests — active after implementation ──────────────────────────
 
 
-class TestBAAServiceBehavioralRED:
-    """Expected behaviors — all raise NotImplementedError until dev implements.
+class TestBAAServiceBehavioral:
+    """BAAService behaviors — active after implementation replaces NotImplementedError stubs."""
 
-    Pattern: test either asserts the NotImplementedError or uses try/skip
-    so they become active when the stub is replaced with real code.
-    """
+    def test_init_succeeds(self):
+        """BAAService should instantiate without error."""
+        service = BAAService()
+        assert service is not None
+        assert service._agreements == {}
 
-    def test_init_raises_not_implemented(self):
-        """Instantiating BAAService should raise NotImplementedError (RED)."""
-        with pytest.raises(NotImplementedError):
-            BAAService()
-
-    def test_init_with_db_factory_raises_not_implemented(self):
-        """Instantiating with db_factory should raise NotImplementedError (RED)."""
-        with pytest.raises(NotImplementedError):
-            BAAService(db_factory=lambda: None)
+    def test_init_with_db_factory_succeeds(self):
+        """BAAService should accept an optional db_factory."""
+        service = BAAService(db_factory=lambda: None)
+        assert service is not None
+        assert service._db_factory is not None
 
     @pytest.mark.asyncio
-    async def test_generate_template_raises_not_implemented(self):
-        """generate_template should raise NotImplementedError (RED)."""
-        with pytest.raises(NotImplementedError):
-            service = BAAService.__new__(BAAService)
-            await service.generate_template(
-                org_name="Test Clinic",
-                ba_name="Test BA",
-                effective_date="2026-08-01",
-            )
+    async def test_generate_template_works(self):
+        """generate_template should produce markdown without error."""
+        service = BAAService()
+        result = await service.generate_template(
+            org_name="Test Clinic",
+            ba_name="Test BA",
+            effective_date="2026-08-01",
+        )
+        assert isinstance(result, str)
+        assert len(result) > 0
+        assert "Test Clinic" in result
+        assert "Test BA" in result
+        assert "2026-08-01" in result
 
     @pytest.mark.asyncio
-    async def test_generate_pdf_raises_not_implemented(self):
-        """generate_pdf should raise NotImplementedError (RED)."""
-        with pytest.raises(NotImplementedError):
-            service = BAAService.__new__(BAAService)
-            await service.generate_pdf(agreement_id="test-id")
+    async def test_generate_pdf_works(self):
+        """generate_pdf should produce PDF bytes without error after storing agreement."""
+        service = BAAService()
+        ag_id = await service.store_agreement(
+            org_name="PDF Test Clinic",
+            ba_name="PDF Test BA",
+            signed_by="pdf@test.com",
+        )
+        pdf_bytes = await service.generate_pdf(ag_id)
+        assert isinstance(pdf_bytes, bytes)
+        assert len(pdf_bytes) > 0
+        assert pdf_bytes.startswith(b"%PDF")
 
     @pytest.mark.asyncio
-    async def test_store_agreement_raises_not_implemented(self):
-        """store_agreement should raise NotImplementedError (RED)."""
-        with pytest.raises(NotImplementedError):
-            service = BAAService.__new__(BAAService)
-            await service.store_agreement(
-                org_name="Test Clinic",
-                ba_name="Test BA",
-                signed_by="admin@clinic.com",
-            )
+    async def test_store_agreement_works(self):
+        """store_agreement should return a valid UUID string."""
+        service = BAAService()
+        ag_id = await service.store_agreement(
+            org_name="Store Test",
+            ba_name="Store BA",
+            signed_by="admin@store.com",
+        )
+        assert isinstance(ag_id, str)
+        assert len(ag_id) == 36  # UUID length
 
     @pytest.mark.asyncio
-    async def test_get_agreement_raises_not_implemented(self):
-        """get_agreement should raise NotImplementedError (RED)."""
-        with pytest.raises(NotImplementedError):
-            service = BAAService.__new__(BAAService)
-            await service.get_agreement(agreement_id="test-id")
+    async def test_get_agreement_works(self):
+        """get_agreement should retrieve a stored agreement."""
+        service = BAAService()
+        ag_id = await service.store_agreement(
+            org_name="Get Test",
+            ba_name="Get BA",
+            signed_by="admin@get.com",
+        )
+        agreement = await service.get_agreement(ag_id)
+        assert agreement.org_name == "Get Test"
+        assert agreement.ba_name == "Get BA"
 
     @pytest.mark.asyncio
-    async def test_list_agreements_raises_not_implemented(self):
-        """list_agreements should raise NotImplementedError (RED)."""
-        with pytest.raises(NotImplementedError):
-            service = BAAService.__new__(BAAService)
-            await service.list_agreements()
+    async def test_list_agreements_works(self):
+        """list_agreements should return a list (possibly empty)."""
+        service = BAAService()
+        summaries = await service.list_agreements()
+        assert isinstance(summaries, list)
 
-    # ── Future behavioral tests (skip during RED, activate after impl) ─────
+    # ── Behavioral feature tests ────────────────────────────────────────────
 
     @pytest.mark.asyncio
     async def test_generate_template_returns_markdown(self):
         """generate_template should return valid markdown string."""
-        try:
-            service = BAAService.__new__(BAAService)
-            result = await service.generate_template(
-                org_name="Test Clinic",
-                ba_name="Test BA",
-                effective_date="2026-08-01",
-            )
-        except NotImplementedError:
-            pytest.skip("Not implemented yet — RED phase")
+        service = BAAService()
+        result = await service.generate_template(
+            org_name="Test Clinic",
+            ba_name="Test BA",
+            effective_date="2026-08-01",
+        )
         assert isinstance(result, str)
         assert "# BUSINESS ASSOCIATE AGREEMENT" in result
         assert "Test Clinic" in result
@@ -284,27 +297,26 @@ class TestBAAServiceBehavioralRED:
     @pytest.mark.asyncio
     async def test_generate_pdf_returns_valid_pdf(self):
         """generate_pdf should return bytes that look like a PDF."""
-        try:
-            service = BAAService.__new__(BAAService)
-            pdf_bytes = await service.generate_pdf(agreement_id="test-id")
-        except NotImplementedError:
-            pytest.skip("Not implemented yet — RED phase")
+        service = BAAService()
+        ag_id = await service.store_agreement(
+            org_name="PDF Test",
+            ba_name="PDF BA",
+            signed_by="pdf@test.com",
+        )
+        pdf_bytes = await service.generate_pdf(agreement_id=ag_id)
         assert isinstance(pdf_bytes, bytes)
         assert pdf_bytes.startswith(b"%PDF")
 
     @pytest.mark.asyncio
     async def test_store_and_get_agreement_round_trip(self):
         """store_agreement then get_agreement should return matching record."""
-        try:
-            service = BAAService.__new__(BAAService)
-            ag_id = await service.store_agreement(
-                org_name="Test Clinic",
-                ba_name="Test BA",
-                signed_by="admin@clinic.com",
-            )
-            agreement = await service.get_agreement(ag_id)
-        except NotImplementedError:
-            pytest.skip("Not implemented yet — RED phase")
+        service = BAAService()
+        ag_id = await service.store_agreement(
+            org_name="Test Clinic",
+            ba_name="Test BA",
+            signed_by="admin@clinic.com",
+        )
+        agreement = await service.get_agreement(ag_id)
         assert agreement.org_name == "Test Clinic"
         assert agreement.ba_name == "Test BA"
         assert agreement.signed_by == "admin@clinic.com"
@@ -313,17 +325,19 @@ class TestBAAServiceBehavioralRED:
     @pytest.mark.asyncio
     async def test_list_agreements_returns_list(self):
         """list_agreements should return a list of summaries."""
-        try:
-            service = BAAService.__new__(BAAService)
-            summaries = await service.list_agreements()
-        except NotImplementedError:
-            pytest.skip("Not implemented yet — RED phase")
+        service = BAAService()
+        # Store an agreement so the list is non-empty
+        await service.store_agreement(
+            org_name="List Test",
+            ba_name="List BA",
+            signed_by="admin@list.com",
+        )
+        summaries = await service.list_agreements()
         assert isinstance(summaries, list)
-        if summaries:
-            assert isinstance(summaries[0], BAAgreementSummary)
+        assert len(summaries) > 0
+        assert isinstance(summaries[0], BAAgreementSummary)
 
-    @pytest.mark.asyncio
-    async def test_agreement_immutable_after_store(self):
+    def test_agreement_immutable_after_store(self):
         """Once stored, an agreement should not be updatable (no update method)."""
         assert not hasattr(BAAService, "update_agreement")
         assert not hasattr(BAAService, "modify_agreement")
