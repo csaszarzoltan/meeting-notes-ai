@@ -166,6 +166,13 @@ class TestEncryptionServiceBehavioral:
     @pytest.fixture
     def svc(self):
         from meeting_notes_ai.hipaa.config import HIPAAConfig
+        import json
+        from pathlib import Path
+
+        # Clear any persisted key store from previous tests (B4 fix)
+        key_store_path = Path.home() / ".meeting-notes-ai" / "key_store.json"
+        if key_store_path.exists():
+            key_store_path.unlink()
 
         return EncryptionService(
             HIPAAConfig(encryption_enabled=True),

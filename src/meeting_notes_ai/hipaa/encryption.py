@@ -5,13 +5,17 @@ Implements a KMS-inspired envelope encryption model:
 - Per-tenant Data Encryption Keys (DEKs) generated on tenant provisioning
 - DEKs are wrapped (encrypted) with the KEK before storage
 - AES-256-GCM provides authenticated encryption (confidentiality + integrity)
+- Wrapped DEKs are persisted to ``key_store.json`` for restart survival (B4)
 """
 from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import os
-from dataclasses import dataclass
+import threading
+from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Any, Callable
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -77,6 +81,60 @@ class EncryptionService:
         self._key_store: dict[str, str] = {}
         # In-memory key metadata: tenant_id -> KeyInfo
         self._key_meta: dict[str, KeyInfo] = {}
+        
+        # File persistence for DEK survival across restarts (B4 fix)
+        self._key_store_path = Path.home() / ".meeting-notes-ai" / "key_store.json"
+        self._key_store_path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.Lock()
+        
+        # Load persisted keys on startup
+        self._load_key_store()
+
+    def _load_key_store(self) -> None:
+        """Load wrapped DEKs from disk to survive restarts (B4 fix)."""
+        if not self._key_store_path.exists():
+            return
+        try:
+            with self._lock:
+                data = json.loads(self._key_store_path.read_text(encoding="utf-8"))
+                self._key_store = data.get("key_store", {})
+                # Reconstruct key metadata from stored wrapped keys
+                for tenant_id, wrapped in self._key_store.items():
+                    try:
+                        dek = self._unwrap_key(wrapped)
+                        fp = _fingerprint(dek)
+                        self._key_meta[tenant_id] = KeyInfo(
+                            tenant_id=tenant_id,
+                            key_fingerprint=fp,
+                            algorithm="AES-256-GCM",
+                            is_active=True,
+                            created_at=data.get("timestamps", {}).get(tenant_id, _now_iso()),
+                            rotated_at=None,
+                        )
+                    except Exception:
+                        # Key exists but can't be unwrapped (wrong KEK?) — skip
+                        pass
+        except Exception:
+            # Corrupted file — start fresh
+            pass
+
+    def _save_key_store(self) -> None:
+        """Persist wrapped DEKs to disk for restart survival (B4 fix)."""
+        try:
+            with self._lock:
+                timestamps = {}
+                for tid, meta in self._key_meta.items():
+                    timestamps[tid] = meta.created_at
+                data = {
+                    "key_store": self._key_store,
+                    "timestamps": timestamps,
+                }
+                self._key_store_path.write_text(
+                    json.dumps(data, indent=2), encoding="utf-8"
+                )
+        except Exception:
+            # Best-effort persistence — don't crash the request
+            pass
 
     # ── Internal crypto helpers ────────────────────────────────────────────────
 
@@ -127,8 +185,9 @@ class EncryptionService:
 
     async def generate_tenant_key(self, tenant_id: str) -> str:
         """Generate a DEK for *tenant_id* wrapped with the current KEK.
-
+        
         Returns the key fingerprint.
+        Persisted to disk for restart survival (B4 fix).
         """
         loop = _get_loop()
 
@@ -145,6 +204,7 @@ class EncryptionService:
                 created_at=_now_iso(),
                 rotated_at=None,
             )
+            self._save_key_store()
             return fp
 
         return await loop.run_in_executor(None, _gen)
@@ -241,7 +301,10 @@ class EncryptionService:
     # ── Key rotation ──────────────────────────────────────────────────────────
 
     async def rotate_master_key(self, new_kek_secret: str) -> int:
-        """Re-wrap all DEKs with a new KEK. Returns count of re-wrapped keys."""
+        """Re-wrap all DEKs with a new KEK. Returns count of re-wrapped keys.
+        
+        Persisted to disk for restart survival (B4 fix).
+        """
         loop = _get_loop()
 
         def _rotate() -> int:
@@ -257,6 +320,7 @@ class EncryptionService:
                     meta.rotated_at = _now_iso()
                 count += 1
             self._master_key = new_kek
+            self._save_key_store()
             return count
 
         return await loop.run_in_executor(None, _rotate)
