@@ -105,12 +105,13 @@ class TestEncryptionServiceInterface:
     def test_internal_aes_decrypt(self):
         assert hasattr(EncryptionService, "_aes_decrypt")
 
-    def test_init_accepts_config(self, hipaa_config):
+    def test_init_accepts_config(self):
         """Constructor should accept HIPAAConfig + db_factory."""
+        from meeting_notes_ai.hipaa.config import HIPAAConfig
         old = os.environ.get("HIPAA_MASTER_KEY")
-        os.environ["HIPAA_MASTER_KEY"] = "ab" * 32
+        os.environ["HIPAA_MASTER_KEY"] = TEST_MASTER_KEY_HEX
         try:
-            svc = EncryptionService(hipaa_config, lambda: None)
+            svc = EncryptionService(HIPAAConfig(), lambda: None)
             assert isinstance(svc, EncryptionService)
         finally:
             if old is None:
