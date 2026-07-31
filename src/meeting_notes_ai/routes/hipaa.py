@@ -65,6 +65,19 @@ def _get_baa_service() -> Any:
     return _baa_service
 
 
+def _client_ip(request: Request) -> str:
+    """Best-effort client IP for HIPAA audit trails (who/what/when/WHERE)."""
+    if request.client is not None and request.client.host:
+        return request.client.host
+    forwarded = request.headers.get("x-forwarded-for", "")
+    return forwarded.split(",")[0].strip() if forwarded else ""
+
+
+def _client_user_agent(request: Request) -> str:
+    """Best-effort client User-Agent for HIPAA audit trails (truncated)."""
+    return (request.headers.get("user-agent") or "")[:512]
+
+
 async def get_transcription_service(request: Request) -> Any:
     """FastAPI dependency providing the transcription service.
 
@@ -142,6 +155,7 @@ class BAAGenerateResponse(BaseModel):
 
 @router.post("/api/v1/transcribe", response_model=TranscribeResponse)
 async def transcribe_audio(
+    request: Request,
     file: UploadFile = File(...),
     language: str | None = Form(None),
     phi_redaction: bool = Form(False),
@@ -198,6 +212,8 @@ async def transcribe_audio(
             resource=filename,
             phi_classification="phi" if phi_redacted else "none",
             outcome="success",
+            ip_address=_client_ip(request),
+            user_agent=_client_user_agent(request),
             details={
                 "phi_redaction": phi_redaction,
                 "redaction_matches": redaction_matches,
@@ -271,7 +287,8 @@ async def export_audit_logs(
 
 @router.post("/api/v1/encryption/rotate-key", response_model=RotateKeyResponse)
 async def rotate_key(
-    request: RotateKeyRequest,
+    request: Request,
+    request_body: RotateKeyRequest,
     user: dict = Depends(get_current_user),
     audit: Any = Depends(get_audit_logger),
     encryption: Any = Depends(get_encryption_service),
@@ -281,7 +298,7 @@ async def rotate_key(
     Requires the new key seed secret in the body. The old wrapped keys
     are re-encrypted with the new KEK; returns how many were re-wrapped.
     """
-    count = await encryption.rotate_master_key(request.new_master_key)
+    count = await encryption.rotate_master_key(request_body.new_master_key)
     rotated_at = datetime.now(timezone.utc).isoformat()
 
     await audit.log(
@@ -292,6 +309,8 @@ async def rotate_key(
             resource="master-key",
             phi_classification="none",
             outcome="success",
+            ip_address=_client_ip(request),
+            user_agent=_client_user_agent(request),
             details={"re_wrapped_keys": count},
         )
     )
@@ -303,7 +322,8 @@ async def rotate_key(
     "/api/v1/compliance/baa/generate", response_model=BAAGenerateResponse
 )
 async def generate_baa(
-    request: BAAGenerateRequest,
+    request: Request,
+    baa_request: BAAGenerateRequest,
     user: dict = Depends(get_current_user),
     audit: Any = Depends(get_audit_logger),
 ) -> BAAGenerateResponse:
@@ -314,9 +334,9 @@ async def generate_baa(
     """
     baa_service = _get_baa_service()
     agreement_id = await baa_service.store_agreement(
-        org_name=request.org_name,
-        ba_name=request.ba_name,
-        signed_by=request.signed_by,
+        org_name=baa_request.org_name,
+        ba_name=baa_request.ba_name,
+        signed_by=baa_request.signed_by,
     )
     agreement = await baa_service.get_agreement(agreement_id)
 
@@ -328,7 +348,9 @@ async def generate_baa(
             resource=agreement_id,
             phi_classification="none",
             outcome="success",
-            details={"ba_name": request.ba_name},
+            ip_address=_client_ip(request),
+            user_agent=_client_user_agent(request),
+            details={"ba_name": baa_request.ba_name},
         )
     )
 
