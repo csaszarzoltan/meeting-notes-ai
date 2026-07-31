@@ -7,63 +7,115 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.4.0] — 2026-07-30
+## [0.5.0] — 2026-07-31
 
 ### Added
 
-- **HIPAA Mode** — Full HIPAA compliance feature suite for healthcare meeting notes.
+- **HIPAA Compliance Library** — `meeting_notes_ai.hipaa` package with five
+  feature areas for healthcare meeting transcription and PHI processing.
 
-#### PHI Redaction (P0)
-- PHI Patterns Registry with 18 HIPAA identifier categories (names, SSN, DOB, phone, email, etc.)
-- Configurable redaction modes: mask, hash, truncate, annotate
-- Hot-reloadable patterns without app restart
-- API endpoints: `POST /api/v1/hipaa/scan`, `POST /api/v1/hipaa/redact`, `GET /api/v1/hipaa/patterns`
+#### PHI Redaction (`hipaa.phi_patterns`, `hipaa.redactor`)
+- `PHIRedactor` — regex-based scan/redact with built-in patterns for SSN, DOB,
+  phone, email, MRN, and patient/provider names (plus generic capitalized name
+  pairs with false-positive filtering)
+- Redaction modes: `mask` (`[REDACTED]`), `hash` (SHA-256 prefix),
+  `truncate`, `annotate` (`[PHI:<len>]`)
+- Runtime custom patterns (`add_custom_pattern`), cumulative stats
+  (`get_stats`), hot-reloadable patterns JSON (`reload_patterns`)
+- `PHIMatch`, `PHIRedactionResult` dataclasses; `hipaa.redactor` re-exports
+  for backward compatibility
 
-#### LLM PHI Validation (P0)
-- LLM validation pass to catch regex misses and reduce false positives
-- Confidence scoring per match
-- Graceful degradation when LLM API is unavailable
-- Configurable toggle in HIPAAConfig
+#### Append-Only Audit Logging (`hipaa.audit_logger`)
+- `AuditLogger` + `AuditEntry` — JSONL append-only trail with mandatory fields
+  (timestamp, actor, action, resource) validated before write
+- Query with filters, aggregate stats (`get_stats`), manual rotation
+  (`rotate`), date-range export (`export_range`)
+- 6-year default retention (`audit_log_retention_days = 365 * 6`)
 
-#### Append-Only Audit Logging (P0)
-- JSONL-based append-only audit trail
-- HIPAA-required fields: timestamp, actor, action, resource, outcome
-- Automatic log rotation with 6-year retention
-- API endpoints: `GET /api/v1/hipaa/audit-log`, `GET /api/v1/hipaa/audit-log/stats`
+#### AES-256 Encryption at Rest (`hipaa.encryption`)
+- `EncryptionService` — envelope encryption: master KEK (SHA-256 of
+  `HIPAA_MASTER_KEY` env var) wrapping per-tenant AES-256-GCM DEKs
+- Field-level (`encrypt_field`/`decrypt_field`) and document-level
+  (`encrypt_document`/`decrypt_document`) encryption
+- Master key rotation (`rotate_master_key`) re-wraps all DEKs; key metadata
+  (`get_key_info`) never exposes plaintext keys
+- Exception hierarchy: `EncryptionError`, `DecryptionError`,
+  `KeyNotFoundError`
 
-#### AES-256 Encryption at Rest (P0)
-- Envelope encryption with master KEK + per-tenant DEKs
-- AES-256-GCM authenticated encryption
-- Key rotation support
-- API endpoints: `POST /api/v1/hipaa/encryption/keys`, `GET .../keys/{tenant_id}`, `POST .../rotate`
+#### BAA Template & Management (`hipaa.baa`)
+- `BAAService` — Jinja2 BAA template with all HIPAA §164.504(e) required
+  clauses (permitted uses, safeguards, breach notification, minimum
+  necessary, term/termination, return-or-destruction of PHI within 30 days)
+- Template generation (`generate_template`), immutable agreement storage
+  (`store_agreement`/`get_agreement`/`list_agreements`), PDF export via
+  fpdf2 (`generate_pdf` — no weasyprint dependency)
 
-#### BAA Template & Management (P1)
-- Jinja2-based BAA template with all HIPAA §164.504(e) required clauses
-- PDF export via fpdf2
-- Immutable storage for signed agreements
-- API endpoints: `POST /api/v1/hipaa/baa/generate`, `GET .../baa/{id}`, `GET .../baa/{id}/export`
-
-#### Compliance Dashboard (P1)
-- REST API for compliance metrics aggregation
-- Chart.js HTML dashboard with summary cards, PHI category pie chart, risk level bar chart
-- API endpoints: `GET /api/v1/hipaa/compliance/summary`, `GET .../compliance/phi-stats`, `GET .../compliance/activity`
-
-#### Thread-safe Crypto Context Cleanup (P2)
-- Fernet/AES contexts not reused across coroutines
-- Warning log when KEK env var is missing
-- Graceful degradation to "not enabled" mode
+#### Compliance Dashboard Data (`hipaa.dashboard`)
+- `ComplianceService` — aggregates audit, encryption, BAA, and PHI stats
+  into `ComplianceSummary` (compliance score 0.0–1.0), `PHIStats`
+  (chart-ready category/risk breakdown), and recent activity
+- `hipaa.middleware` — FastAPI dependencies (`get_phi_redactor`,
+  `get_audit_logger`, `get_encryption_service`) ready for route wiring
 
 ### Changed
 
-- Updated `src/meeting_notes_ai/__init__.py` version to `0.4.0`
+- Version bumped `0.4.0` → `0.5.0`
+- `README.md` — HIPAA section rewritten to document the library API (the
+  v0.4.0 entry previously listed `/api/v1/hipaa/*` REST endpoints that were
+  never implemented); added badges, healthcare-mode getting started,
+  examples links, verified config table
+- `docs/HIPAA_MODE.md` — rewritten from TODO scaffolding to a full guide
+  (PHI redaction config, audit log interpretation, encryption key
+  management, BAA usage, dashboard interpretation, config reference,
+  troubleshooting, compliance checklist)
+- `examples/` — new runnable scripts: `hipaa_phi_redaction.py`,
+  `hipaa_audit_logs.py`, `hipaa_rotate_key.py`, `hipaa_baa_generate.py`,
+  `hipaa_compliance_dashboard.py` (all verified with the repo venv)
+- `CHANGELOG.md` — v0.4.0 entry corrected: it previously claimed REST
+  endpoints that were never implemented; HIPAA features ship as a library
+  in this release
 
-### Security
+### Breaking changes
 
-- All PHI processing is now audit-logged
-- Encryption keys are never exposed in plaintext via API or logs
-- Per-tenant key isolation for multi-tenant deployments
+- **No `/api/v1/hipaa/*` HTTP endpoints in this release.** The v0.4.0
+  changelog entry listed REST endpoints (scan/redact/audit-log/encryption/
+  baa/compliance) that never existed in the codebase — they are not part of
+  v0.5.0 either. HIPAA features are consumed via the Python library API;
+  wire the `hipaa.middleware` FastAPI dependencies into your own routes to
+  expose them over HTTP.
+- `HIPAAConfig.load()` returns defaults — env-var overrides are not
+  implemented; configure via the dataclass constructor.
+- LLM PHI validation (`hipaa.llm_validator`) is a stub in this release
+  (confirms regex matches, never calls an external LLM).
+- Key store (`EncryptionService`) and BAA agreements (`BAAService`) are
+  in-memory; `db_factory` is accepted but unused — persistence is planned.
+
+### Tests
+
+- 269 HIPAA tests passing across 7 files: `test_phi_redaction` (52),
+  `test_audit_logging` (38), `test_encryption` (39), `test_baa_template`
+  (23), `test_compliance_dashboard` (43), `test_hipaa_config` (36),
+  `test_dashboard` (38)
+- Pre-existing failures (85) in the v0.4.0 rate-limit/API-key chain are
+  unchanged and unrelated to HIPAA
 
 ---
+
+## [0.4.0] — 2026-07-30
+
+### Changed
+
+- Version bumped `0.3.0` → `0.4.0`
+- `README.md` — added HIPAA mode section (subsequently rewritten in v0.5.0)
+- `CHANGELOG.md` — initial HIPAA changelog entry (superseded by v0.5.0)
+- `docs/HIPAA_MODE.md` — added as TODO scaffolding (completed in v0.5.0)
+- Added HIPAA scaffolding: `hipaa/baa.py`, `hipaa/dashboard.py`, BAA +
+  dashboard templates, and pre-written HIPAA tests
+
+> **Note:** this entry originally described HIPAA REST endpoints
+> (`/api/v1/hipaa/*`) and features that were planned but never shipped at
+> this version. The implemented HIPAA compliance library ships in v0.5.0 —
+> see the [0.5.0] entry above.
 
 ## [0.3.0] — 2026-07-15
 

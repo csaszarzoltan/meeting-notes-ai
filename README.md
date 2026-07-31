@@ -2,6 +2,10 @@
 
 Micro-SaaS for meeting transcription and structured notes.
 
+![Version](https://img.shields.io/badge/version-0.5.0-blue)
+![Python](https://img.shields.io/badge/python-3.11+-green)
+![HIPAA](https://img.shields.io/badge/HIPAA-ready-8A2BE2)
+
 ## Features
 
 - **Transcription**: Upload audio files for transcription via OpenAI Whisper API
@@ -10,6 +14,7 @@ Micro-SaaS for meeting transcription and structured notes.
   - **General**: Standard meeting notes
   - **Healthcare**: SOAP notes with HIPAA compliance markers
   - **Legal**: Deposition summaries with objection tracking
+- **HIPAA Compliance Library (v0.5.0+)**: PHI redaction, append-only audit logging, AES-256-GCM encryption at rest, BAA template generation, and a compliance dashboard data service — see [HIPAA Mode](docs/HIPAA_MODE.md)
 - **Multi-format Export**: JSON, Markdown, PDF, and ZIP batch download
 - **Batch Processing**: Upload up to 10 audio files per batch with per-file status tracking
 - **Team Workspaces**: Multi-user teams with role-based access (admin/member/viewer)
@@ -19,75 +24,104 @@ Micro-SaaS for meeting transcription and structured notes.
 - **Database**: Async SQLAlchemy with Railway Postgres (Alembic-ready)
 - **SSRF Protection**: Built-in URL validation to prevent server-side request forgery
 
-## HIPAA Compliance Mode (v0.4.0+)
+## HIPAA Compliance Mode (v0.5.0+)
 
-MeetingNotesAI supports **HIPAA compliance mode** for healthcare meeting transcription and PHI (Protected Health Information) processing. Enable it by setting the required environment variables.
+MeetingNotesAI ships a **HIPAA compliance library** for healthcare meeting
+transcription and PHI (Protected Health Information) processing. It lives in
+`meeting_notes_ai.hipaa` and covers five areas:
+
+- **PHI Redaction** — Regex-based detection of HIPAA identifiers (SSN, DOB,
+  phone, email, MRN, names) with configurable modes: `mask`, `hash`,
+  `truncate`, `annotate`, plus runtime custom patterns.
+- **Append-Only Audit Logging** — JSONL audit trail for all PHI access and
+  processing events with mandatory fields (timestamp, actor, action, resource),
+  6-year default retention, manual rotation, and date-range export.
+- **AES-256 Encryption at Rest** — Envelope encryption: a master KEK (derived
+  from `HIPAA_MASTER_KEY`) wraps per-tenant AES-256-GCM data keys. Field- and
+  document-level encrypt/decrypt, master key rotation.
+- **BAA Template & Management** — Jinja2 Business Associate Agreement template
+  with all HIPAA §164.504(e) clauses, immutable agreement storage, PDF export
+  via fpdf2.
+- **Compliance Dashboard Data** — `ComplianceService` aggregates audit,
+  encryption, BAA, and PHI statistics into a compliance summary and chart-ready
+  data.
+
+> **Scope note:** in v0.5.0 the suite is a **Python library** — there are no
+> `/api/v1/hipaa/*` HTTP endpoints yet, and `POST /api/v1/meetings` does not
+> redact PHI automatically. Integrate the library directly (or wire the
+> FastAPI dependencies in `hipaa/middleware.py` into your own routes).
 
 ### Configuration
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `HIPAA_MASTER_KEY` | — | Master Encryption Key (32-byte hex or base64) |
-| `HIPAA_PHI_PATTERNS_PATH` | `hipaa/phi_patterns.json` | Path to PHI patterns JSON |
-| `HIPAA_AUDIT_LOG_DIR` | `data/audit_logs/` | Audit log storage directory |
-| `HIPAA_AUDIT_RETENTION_DAYS` | `2190` | Log retention (6 years) |
-| `HIPAA_ENCRYPTION_ENABLED` | `true` | Enable/disable encryption at rest |
-| `HIPAA_LLM_VALIDATION_ENABLED` | `true` | Enable/disable LLM PHI validation pass |
-| `HIPAA_BAA_DEFAULT_DAYS` | `365` | Default BAA effective period in days |
+Configuration is done with the `HIPAAConfig` dataclass; defaults are safe for
+development. The only environment variable read by the code is
+`HIPAA_MASTER_KEY` (the encryption KEK seed):
 
-### Quick Start — Enabling HIPAA Mode
+| Field | Default | Description |
+|----------|---------|-------------|
+| `phi_patterns_path` | `hipaa/phi_patterns.json` | Path to PHI patterns JSON (falls back to built-ins) |
+| `audit_log_dir` | `data/audit_logs/` | Audit log storage directory |
+| `audit_log_retention_days` | `2190` | Log retention (6 years, HIPAA minimum) |
+| `encryption_enabled` | `true` | Fail fast if `HIPAA_MASTER_KEY` is missing |
+| `master_key_env_var` | `HIPAA_MASTER_KEY` | Env var holding the KEK seed |
+| `baa_template_path` | `hipaa/templates/baa_template.md.jinja` | BAA Jinja2 template |
+| `default_baa_effective_days` | `365` | Default BAA effective period in days |
+| `llm_validation_enabled` | `true` | LLM validation toggle (stub in v0.5.0) |
+| `llm_validation_threshold` | `0.8` | Confidence threshold (0.0–1.0) |
+
+See [docs/HIPAA_MODE.md](docs/HIPAA_MODE.md) for the full guide, and
+[`examples/`](examples/) for runnable scripts covering every feature area.
+
+### Getting Started — Healthcare Mode
+
+**Healthcare meeting notes (SOAP + HIPAA markers)** are a REST feature since
+v0.2.0 — pass `mode=healthcare` to the meeting endpoint:
 
 ```bash
-# Install dependencies (includes cryptography, weasyprint)
-uv sync
-
-# Set required HIPAA environment variables
-export HIPAA_MASTER_KEY=$(openssl rand -hex 32)
-export DATABASE_URL=sqlite+aiosqlite:///./meeting_notes.db
-export JWT_SECRET=your-secret-key-change-in-production
-export OPENAI_API_KEY=sk-...
-
-# Initialize database
-python -c "from meeting_notes_ai.db import init_db; import anyio; anyio.run(init_db)"
-
-# Run the server (HIPAA features auto-detect env vars on startup)
-uvicorn meeting_notes_ai.main:app --host 0.0.0.0 --port 8000
-
-# Verify HIPAA endpoints
-curl http://localhost:8000/api/v1/hipaa/scan
+curl -X POST http://localhost:8000/api/v1/meetings \
+  -F "file=@consultation.mp3" \
+  -F "mode=healthcare" \
+  -F "patient_id=pat-001" \
+  -F "consent_confirmed=true"
 ```
 
-HIPAA mode activates automatically when the `HIPAA_MASTER_KEY` environment variable is set. The `/api/v1/hipaa/*` endpoints become available, including PHI redaction, audit logging, encryption management, BAA lifecycle, and the compliance dashboard.
+**PHI redaction, audit logging, encryption, BAA, and compliance metrics** are
+library features since v0.5.0:
 
-### HIPAA Features
+```python
+from meeting_notes_ai.hipaa.phi_patterns import PHIRedactor
+from meeting_notes_ai.hipaa.audit_logger import AuditLogger, AuditEntry
+from meeting_notes_ai.hipaa.config import HIPAAConfig
+import asyncio
 
-- **PHI Redaction** — Regex-based detection of 18 HIPAA identifier categories with optional LLM validation pass for higher accuracy
-- **Audit Logging** — Append-only JSONL audit trail with 6-year retention for all PHI access and processing events
-- **Encryption at Rest** — AES-256-GCM envelope encryption with per-tenant data encryption keys
-- **BAA Management** — Business Associate Agreement template generation, PDF export, and immutable storage
-- **Compliance Dashboard** — Real-time metrics via Chart.js HTML dashboard and REST API
+async def main():
+    # Redact PHI before storing a transcript
+    redactor = PHIRedactor()
+    redacted, matches = redactor.redact(
+        "Patient John Smith, SSN 123-45-6789, DOB 03/14/1985"
+    )
+    print(redacted)  # [REDACTED], SSN [REDACTED], DOB [REDACTED]
 
-### API Endpoints
+    # Audit the redaction event
+    logger = AuditLogger(config=HIPAAConfig(audit_log_dir="/tmp/audit-logs"))
+    await logger.log(AuditEntry(
+        timestamp="2026-07-31T12:00:00Z",
+        actor="user-42",
+        action="phi.redact",
+        resource="meeting:abc-123",
+        phi_classification="high",
+    ))
 
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/api/v1/hipaa/scan` | Scan text for PHI matches |
-| POST | `/api/v1/hipaa/redact` | Redact PHI from text |
-| GET | `/api/v1/hipaa/patterns` | List active PHI patterns |
-| GET | `/api/v1/hipaa/audit-log` | Query audit log entries |
-| GET | `/api/v1/hipaa/audit-log/stats` | Audit log statistics |
-| POST | `/api/v1/hipaa/encryption/keys` | Create encryption key for tenant |
-| GET | `/api/v1/hipaa/encryption/keys/{tenant_id}` | Get tenant encryption key info |
-| POST | `/api/v1/hipaa/encryption/rotate` | Rotate encryption keys |
-| POST | `/api/v1/hipaa/baa/generate` | Generate BAA from template |
-| GET | `/api/v1/hipaa/baa/{id}` | Get agreement details |
-| GET | `/api/v1/hipaa/baa/{id}/export` | Export BAA as PDF/Markdown |
-| GET | `/api/v1/hipaa/compliance/summary` | Aggregated compliance metrics |
-| GET | `/api/v1/hipaa/compliance/phi-stats` | PHI detection statistics |
-| GET | `/api/v1/hipaa/compliance/activity` | Recent audit entries |
-| GET | `/api/v1/hipaa/compliance` | HTML compliance dashboard |
+asyncio.run(main())
+```
 
-See [docs/HIPAA_MODE.md](docs/HIPAA_MODE.md) for the full HIPAA mode documentation.
+Encryption requires `HIPAA_MASTER_KEY` to be set (any string — the 32-byte AES
+key is derived via SHA-256):
+
+```bash
+export HIPAA_MASTER_KEY="$(openssl rand -hex 32)"
+PYTHONPATH=src .venv/bin/python examples/hipaa_rotate_key.py
+```
 
 ---
 
@@ -502,8 +536,13 @@ Health check endpoint returning service status.
 ```json
 {
   "status": "healthy",
-  "version": "0.3.0",
-  "database": "connected"
+  "version": "0.1.0",
+  "services": {
+    "app": {
+      "status": "up",
+      "latency_ms": 0.0
+    }
+  }
 }
 ```
 
@@ -513,10 +552,16 @@ Health check endpoint returning service status.
 .venv/bin/python -m pytest -q
 ```
 
-345 tests covering:
+Test coverage by release:
 - 112 v0.1.0 regression tests (transcription, extraction, export, healthcare/legal modes)
 - 163 v0.2.0 tests (DB models, JWT auth, batch processing, team CRUD, webhooks, PDF/ZIP export)
 - 70 v0.3.0 tests (share creation, listing, revocation, public access, expiry, access control)
+- 269 v0.5.0 HIPAA tests (PHI redaction, audit logging, encryption, BAA template, compliance dashboard, HIPAA config)
+
+> Note: the v0.4.0 rate-limit/API-key test files (`test_ratelimit.py`,
+> `test_api_keys.py`, `test_tier_config.py`, `test_middleware.py`,
+> `test_app.py`, `test_auth.py`) still fail because their source never landed
+> in this repository — they are pre-existing failures, unrelated to HIPAA.
 
 ## Deployment
 
