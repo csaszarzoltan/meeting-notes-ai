@@ -153,10 +153,15 @@ serves the Chart.js dashboard page unauthenticated.
 
 ### Tests
 
-- 298 HIPAA tests passing across 8 files: `test_phi_redaction` (52),
-  `test_audit_logging` (38), `test_encryption` (39), `test_baa_template`
-  (23), `test_compliance_dashboard` (43), `test_hipaa_config` (36),
-  `test_dashboard` (38), `test_hipaa_routes` (29)
+- 355 HIPAA tests passing across 9 files: `test_phi_redaction` (56),
+  `test_audit_logging` (42), `test_encryption` (40), `test_baa_template`
+  (23), `test_baa` (43), `test_compliance_dashboard` (48),
+  `test_hipaa_config` (36), `test_dashboard` (38), `test_hipaa_routes`
+  (29) — includes 10 regression tests for S4/S7 (compile-once scan
+  patterns, `scan_timeout_ms` enforcement, zero-width pattern rejection,
+  BAA persistence, Jinja sandboxing) and 10 for S9-S12 (audit tail-write
+  robustness, in-memory chain head, `unprovisioned` health label,
+  `_store_error` recovery, `audit_log_max_bytes` auto-rotation)
 - Test tooling: pytest-xdist parallel execution (`addopts = -n auto -q`),
   `quick`/`integration`/`slow` markers, `pytest-testmon` dev dependency
 - Pre-existing failures (85) in the v0.4.0 rate-limit/API-key chain are
