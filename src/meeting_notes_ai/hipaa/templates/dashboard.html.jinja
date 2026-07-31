@@ -54,7 +54,7 @@
 
     <script>
         // ── Load Summary ──────────────────────────────────────────────────────
-        fetch('/api/v1/hipaa/compliance/summary')
+        fetch('/api/v1/compliance/dashboard/summary')
             .then(r => r.json())
             .then(data => {
                 const grid = document.getElementById('summary-grid');
@@ -80,7 +80,7 @@
             });
 
         // ── Load PHI Stats ────────────────────────────────────────────────────
-        fetch('/api/v1/hipaa/compliance/phi-stats')
+        fetch('/api/v1/compliance/dashboard/phi-stats')
             .then(r => r.json())
             .then(data => {
                 // Category pie chart
@@ -119,7 +119,7 @@
             });
 
         // ── Load Recent Activity ──────────────────────────────────────────────
-        fetch('/api/v1/hipaa/compliance/activity?limit=10')
+        fetch('/api/v1/compliance/dashboard/activity?limit=10')
             .then(r => r.json())
             .then(entries => {
                 const container = document.getElementById('activity-content');
