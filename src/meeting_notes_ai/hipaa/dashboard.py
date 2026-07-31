@@ -2,12 +2,19 @@
 
 Aggregates metrics from AuditLogger, EncryptionService, BAAService, and
 PHIRedactor into structured API endpoints and a minimal HTML dashboard.
+
+All service blocks degrade explicitly: on error they log loudly and mark
+the health/status field (e.g. ``encryption_health="degraded"``) instead of
+swallowing the exception silently.
 """
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # ── Data Models ─────────────────────────────────────────────────────────────────
 
@@ -63,7 +70,8 @@ class ComplianceService:
         """Aggregate overall compliance summary across all modules.
 
         Returns a ComplianceSummary with all fields populated from live data
-        (or defaults when services are not connected or empty).
+        (or defaults when services are not connected or empty). Service
+        failures degrade visible health fields instead of passing silently.
         """
         audit_logger = getattr(self, "_audit_logger", None)
         audit_entries = 0
@@ -76,16 +84,35 @@ class ComplianceService:
                 if latest_ts:
                     last_entry = str(latest_ts)
             except Exception:
-                pass
+                logger.exception("compliance dashboard: audit stats failed")
 
         enc_keys = 0
         enc_health = "healthy"
         encryption_service = getattr(self, "_encryption_service", None)
         if encryption_service is not None:
             try:
-                await encryption_service.get_key_info("__dashboard__")
+                if hasattr(encryption_service, "list_key_info"):
+                    enc_keys = len(await encryption_service.list_key_info())
+                else:
+                    # Fallback: a service exposing only get_key_info is
+                    # probed via a sentinel tenant.
+                    try:
+                        await encryption_service.get_key_info("__dashboard__")
+                        enc_keys = 1
+                    except Exception:
+                        enc_keys = 0
+                store_error = getattr(encryption_service, "_store_error", None)
+                if store_error:
+                    enc_health = "degraded"
             except Exception:
+                enc_health = "degraded"
                 enc_keys = 0
+                logger.exception(
+                    "compliance dashboard: encryption service unavailable"
+                )
+        elif getattr(self, "_encryption_service", None) is None:
+            # No encryption service wired at all — surface it, don't lie.
+            enc_health = "degraded"
 
         baa_count = 0
         baa_service = getattr(self, "_baa_service", None)
@@ -94,7 +121,7 @@ class ComplianceService:
                 agreements = await baa_service.list_agreements()
                 baa_count = len(agreements)
             except Exception:
-                pass
+                logger.exception("compliance dashboard: BAA service failed")
 
         phi_scans = 0
         redactions = 0
@@ -103,8 +130,11 @@ class ComplianceService:
             try:
                 stats_data = phi_redactor.get_stats()
                 phi_scans = stats_data.get("total_matches", 0)
+                redactions = stats_data.get(
+                    "total_redactions", stats_data.get("total_matches", 0)
+                )
             except Exception:
-                pass
+                logger.exception("compliance dashboard: redactor stats failed")
 
         score = self._calc_compliance_score(
             encryption_keys=enc_keys,
@@ -134,7 +164,7 @@ class ComplianceService:
                 stats.by_category = raw.get("by_category", {})
                 stats.by_risk_level = raw.get("by_risk_level", {})
             except Exception:
-                pass
+                logger.exception("compliance dashboard: phi stats failed")
         return stats
 
     async def get_recent_activity(self, limit: int = 50) -> list[dict]:
@@ -154,16 +184,82 @@ class ComplianceService:
                     for e in entries
                 ]
             except Exception:
-                pass
+                logger.exception("compliance dashboard: activity query failed")
         return []
 
     async def get_encryption_status(self) -> dict:
-        """Get encryption key health summary."""
-        return {"status": "healthy", "total_keys": 0, "active_keys": 0}
+        """Get encryption key health summary from the live registry."""
+        encryption_service = getattr(self, "_encryption_service", None)
+        if encryption_service is None:
+            return {
+                "status": "degraded",
+                "total_keys": 0,
+                "active_keys": 0,
+                "detail": "encryption service not wired",
+            }
+        try:
+            if hasattr(encryption_service, "list_key_info"):
+                keys = await encryption_service.list_key_info()
+            else:
+                keys = {}
+            total = len(keys)
+            active = sum(
+                1 for info in keys.values() if getattr(info, "is_active", True)
+            )
+            store_error = getattr(encryption_service, "_store_error", None)
+            status = "degraded" if store_error else "healthy"
+            payload: dict[str, Any] = {
+                "status": status,
+                "total_keys": total,
+                "active_keys": active,
+            }
+            if store_error:
+                payload["detail"] = str(store_error)
+            return payload
+        except Exception:
+            logger.exception("compliance dashboard: encryption status failed")
+            return {
+                "status": "degraded",
+                "total_keys": 0,
+                "active_keys": 0,
+                "detail": "encryption service unavailable",
+            }
 
     async def get_baa_compliance(self) -> dict:
-        """Get BAA compliance status."""
-        return {"total_agreements": 0, "active": 0, "expired": 0, "terminated": 0}
+        """Get BAA compliance status from the live agreement store."""
+        baa_service = getattr(self, "_baa_service", None)
+        if baa_service is None:
+            return {
+                "total_agreements": 0,
+                "active": 0,
+                "expired": 0,
+                "terminated": 0,
+                "status": "degraded",
+                "detail": "baa service not wired",
+            }
+        try:
+            agreements = await baa_service.list_agreements()
+            counts: dict[str, int] = {"active": 0, "expired": 0, "terminated": 0}
+            for ag in agreements:
+                status = getattr(ag, "status", "active") or "active"
+                counts[status] = counts.get(status, 0) + 1
+            return {
+                "total_agreements": len(agreements),
+                "active": counts["active"],
+                "expired": counts["expired"],
+                "terminated": counts["terminated"],
+                "status": "healthy",
+            }
+        except Exception:
+            logger.exception("compliance dashboard: BAA compliance failed")
+            return {
+                "total_agreements": 0,
+                "active": 0,
+                "expired": 0,
+                "terminated": 0,
+                "status": "degraded",
+                "detail": "baa service unavailable",
+            }
 
     # ── Internal ───────────────────────────────────────────────────────────────
 
@@ -180,6 +276,8 @@ class ComplianceService:
             score -= 0.3
         elif encryption_health == "degraded":
             score -= 0.1
+        if encryption_keys == 0:
+            score -= 0.2
         if baa_agreements == 0:
             score -= 0.2
         if audit_entries == 0:

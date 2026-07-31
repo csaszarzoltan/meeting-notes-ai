@@ -93,16 +93,22 @@ class FakeTranscriber:
 
 
 @pytest.fixture
-def client(_setup_test_db, tmp_path):
+def client(_setup_test_db, tmp_path, monkeypatch):
     """TestClient with HIPAA audit logging redirected to a temp dir."""
     from fastapi.testclient import TestClient
 
+    monkeypatch.setenv("HIPAA_MASTER_KEY", "apitest-master-key")
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     audit_dir = tmp_path / "audit"
 
     def _audit_override() -> AuditLogger:
         return _make_logger(audit_dir)
 
+    def _enc_override() -> EncryptionService:
+        return EncryptionService(HIPAAConfig(encryption_enabled=True))
+
     app.dependency_overrides[get_audit_logger] = _audit_override
+    app.dependency_overrides[get_encryption_service] = _enc_override
     with TestClient(app) as c:
         yield c
     app.dependency_overrides.clear()

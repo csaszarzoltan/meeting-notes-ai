@@ -369,6 +369,7 @@ async def compliance_dashboard(
     user: dict = Depends(get_current_user),
     audit: Any = Depends(get_audit_logger),
     redactor: Any = Depends(get_phi_redactor),
+    encryption: Any = Depends(get_encryption_service),
 ) -> dict[str, Any]:
     """Return the combined compliance dashboard payload.
 
@@ -377,11 +378,9 @@ async def compliance_dashboard(
     """
     from meeting_notes_ai.hipaa.dashboard import ComplianceService
 
-    service = ComplianceService(
-        audit_logger=audit,
-        phi_redactor=redactor,
-        baa_service=_get_baa_service(),
-    )
+    service = ComplianceService(encryption_service=encryption,
+                                audit_logger=audit, phi_redactor=redactor,
+                                baa_service=_get_baa_service())
     summary = await service.get_summary()
     phi_stats = await service.get_phi_stats()
     activity = await service.get_recent_activity(limit=50)
@@ -398,15 +397,14 @@ async def compliance_dashboard_summary(
     user: dict = Depends(get_current_user),
     audit: Any = Depends(get_audit_logger),
     redactor: Any = Depends(get_phi_redactor),
+    encryption: Any = Depends(get_encryption_service),
 ) -> dict[str, Any]:
     """Return the compliance summary card data."""
     from meeting_notes_ai.hipaa.dashboard import ComplianceService
 
-    service = ComplianceService(
-        audit_logger=audit,
-        phi_redactor=redactor,
-        baa_service=_get_baa_service(),
-    )
+    service = ComplianceService(encryption_service=encryption,
+                                audit_logger=audit, phi_redactor=redactor,
+                                baa_service=_get_baa_service())
     return asdict(await service.get_summary())
 
 
@@ -414,11 +412,13 @@ async def compliance_dashboard_summary(
 async def compliance_dashboard_phi_stats(
     user: dict = Depends(get_current_user),
     redactor: Any = Depends(get_phi_redactor),
+    encryption: Any = Depends(get_encryption_service),
 ) -> dict[str, Any]:
     """Return PHI detection statistics for the dashboard charts."""
     from meeting_notes_ai.hipaa.dashboard import ComplianceService
 
-    service = ComplianceService(phi_redactor=redactor)
+    service = ComplianceService(encryption_service=encryption,
+                                phi_redactor=redactor)
     return asdict(await service.get_phi_stats())
 
 
@@ -427,11 +427,13 @@ async def compliance_dashboard_activity(
     limit: int = Query(50, ge=1, le=500),
     user: dict = Depends(get_current_user),
     audit: Any = Depends(get_audit_logger),
+    encryption: Any = Depends(get_encryption_service),
 ) -> list[dict[str, Any]]:
     """Return recent audit activity (newest first)."""
     from meeting_notes_ai.hipaa.dashboard import ComplianceService
 
-    service = ComplianceService(audit_logger=audit)
+    service = ComplianceService(encryption_service=encryption,
+                                audit_logger=audit)
     return await service.get_recent_activity(limit=limit)
 
 
