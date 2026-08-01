@@ -266,6 +266,51 @@ async def _seed_test_data(session: AsyncSession):
     for link in shared_links:
         session.add(link)
 
+    # ── Secure file storage (v0.7.0) — guarded: only seed once the model exists ──
+    # StoredFile/StorageFileKind/StorageEncryption are added by the developer
+    # task; until then this block no-ops so the existing suite stays green.
+    try:
+        from meeting_notes_ai.db.models import StorageEncryption, StorageFileKind, StoredFile
+    except (ImportError, AttributeError):
+        StoredFile = None
+
+    if StoredFile is not None:
+        import hashlib
+
+        now = datetime.now(timezone.utc)
+        session.add(
+            StoredFile(
+                id="stored-file-id",
+                meeting_id="test-meeting",
+                team_id=None,
+                uploaded_by="test-user-id",
+                kind=StorageFileKind.AUDIO,
+                object_key="audio/test-meeting/stored-file-id",
+                bucket="local",
+                size_bytes=18,
+                sha256=hashlib.sha256(b"stored-file-payload").hexdigest(),
+                content_type="audio/wav",
+                encryption=StorageEncryption.NONE,
+                expires_at=now + timedelta(days=30),
+            )
+        )
+        session.add(
+            StoredFile(
+                id="expired-stored-file-id",
+                meeting_id="test-meeting",
+                team_id=None,
+                uploaded_by="test-user-id",
+                kind=StorageFileKind.AUDIO,
+                object_key="audio/test-meeting/expired-stored-file-id",
+                bucket="local",
+                size_bytes=18,
+                sha256=hashlib.sha256(b"expired-stored-payload").hexdigest(),
+                content_type="audio/wav",
+                encryption=StorageEncryption.NONE,
+                expires_at=now - timedelta(days=1),
+            )
+        )
+
 
 # ── HIPAA test fixtures ──────────────────────────────────────────────────────────
 
@@ -349,3 +394,132 @@ def event_loop():
     loop = asyncio.new_event_loop()
     yield loop
     loop.close()
+
+
+# ── Secure file storage fixtures (v0.7.0) ──────────────────────────────────────
+# These fixtures are guarded: they skip with a clear "implementation pending"
+# reason until the storage backend / StoredFile model are implemented. Once the
+# developer task lands, the fixtures activate and provide live objects.
+
+
+@pytest.fixture
+def storage_local_backend(tmp_path):
+    """LocalStorageBackend rooted at a temp dir (skips until implemented)."""
+    pytest.importorskip(
+        "meeting_notes_ai.storage.local",
+        reason="implementation pending: meeting_notes_ai/storage/local.py",
+    )
+    from meeting_notes_ai.storage.local import LocalStorageBackend
+
+    return LocalStorageBackend(str(tmp_path / "storage"))
+
+
+@pytest.fixture
+def storage_encryptor(monkeypatch):
+    """FileEncryptor with a deterministic key (skips until implemented)."""
+    pytest.importorskip(
+        "meeting_notes_ai.storage.encryption",
+        reason="implementation pending: meeting_notes_ai/storage/encryption.py",
+    )
+    monkeypatch.setenv("STORAGE_ENCRYPTION", "aes256gcm")
+    monkeypatch.setenv("STORAGE_ENCRYPTION_KEY", "test-storage-encryption-key")
+    from meeting_notes_ai.storage.encryption import FileEncryptor
+
+    return FileEncryptor(mode="aes256gcm")
+
+
+@pytest.fixture
+def stored_file(_setup_test_db, tmp_path):
+    """A live StoredFile row (audio) whose bytes live on disk in a temp backend.
+
+    The row belongs to a freshly created meeting owned by test-user-id (no
+    team), so tests using it never collide with the conftest-seeded rows.
+
+    Returns a SimpleNamespace(backend, meeting_id, row_id, key, payload).
+    Skips until the LocalStorageBackend and StoredFile model are implemented.
+    """
+    return _make_stored_file(_setup_test_db, tmp_path, team_meeting=False)
+
+
+@pytest.fixture
+def stored_team_file(_setup_test_db, tmp_path):
+    """Like stored_file but attached to team-meeting (test-team).
+
+    team-meeting belongs to test-team where viewer-user-id has VIEWER role,
+    so it exercises the "viewer may download" RBAC path (AC3).
+    """
+    return _make_stored_file(_setup_test_db, tmp_path, team_meeting=True)
+
+
+def _make_stored_file(_setup_test_db, tmp_path, team_meeting: bool):
+    """Shared implementation behind the stored_file fixtures."""
+    import asyncio
+    import hashlib
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    pytest.importorskip(
+        "meeting_notes_ai.storage.local",
+        reason="implementation pending: meeting_notes_ai/storage/local.py",
+    )
+    try:
+        from meeting_notes_ai.storage.local import LocalStorageBackend
+
+        from meeting_notes_ai.db.models import (
+            Meeting,
+            StorageEncryption,
+            StorageFileKind,
+            StoredFile,
+        )
+        from meeting_notes_ai.db.session import get_db_session
+    except (ImportError, AttributeError) as exc:  # pragma: no cover - pre-impl
+        pytest.skip(f"implementation pending: StoredFile model ({exc})")
+
+    backend_dir = tmp_path / "storage"
+    backend = LocalStorageBackend(str(backend_dir))
+    meeting_id = "team-meeting" if team_meeting else f"storage-{uuid4().hex[:12]}"
+    key = f"audio/{meeting_id}/{uuid4().hex}"
+    payload = b"stored-file-payload"
+    row_id = str(uuid4())
+
+    async def _seed() -> None:
+        await backend.put(key, payload, "audio/wav")
+        async for session in get_db_session():
+            if not team_meeting:
+                session.add(
+                    Meeting(
+                        id=meeting_id,
+                        title="Storage Test Meeting",
+                        user_id="test-user-id",
+                        filename="storage_test.wav",
+                        mode="general",
+                        transcript="storage test transcript",
+                    )
+                )
+                await session.flush()
+            session.add(
+                StoredFile(
+                    id=row_id,
+                    meeting_id=meeting_id,
+                    team_id="test-team" if team_meeting else None,
+                    uploaded_by="test-user-id",
+                    kind=StorageFileKind.AUDIO,
+                    object_key=key,
+                    bucket="local",
+                    size_bytes=len(payload),
+                    sha256=hashlib.sha256(payload).hexdigest(),
+                    content_type="audio/wav",
+                    encryption=StorageEncryption.NONE,
+                    expires_at=None,
+                )
+            )
+            await session.commit()
+
+    asyncio.run(_seed())
+    return SimpleNamespace(
+        backend=backend,
+        meeting_id=meeting_id,
+        row_id=row_id,
+        key=key,
+        payload=payload,
+    )
