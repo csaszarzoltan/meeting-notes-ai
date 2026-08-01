@@ -5,6 +5,10 @@ from dataclasses import is_dataclass
 
 import pytest
 
+# Mark as quick (unit tests)
+pytestmark = pytest.mark.quick
+
+
 from meeting_notes_ai.hipaa.config import HIPAAConfig
 
 # ── Interface tests (should pass immediately) ──────────────────────────────

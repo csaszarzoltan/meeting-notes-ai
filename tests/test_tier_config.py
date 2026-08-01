@@ -15,6 +15,10 @@ Task 1.3 — User Tier Field + Admin Endpoint:
 from __future__ import annotations
 
 import pytest
+
+# Mark as quick (unit tests)
+pytestmark = pytest.mark.quick
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 

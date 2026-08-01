@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import pytest
+
+# Mark as integration (uses TestClient/AsyncClient)
+pytestmark = pytest.mark.integration
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 

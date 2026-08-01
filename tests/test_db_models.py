@@ -9,6 +9,10 @@ from __future__ import annotations
 from inspect import signature
 
 import pytest
+
+# Mark as quick (unit tests)
+pytestmark = pytest.mark.quick
+
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 # ── Interface Tests (must PASS) ───────────────────────────────────────────────

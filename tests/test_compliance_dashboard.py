@@ -14,6 +14,10 @@ from inspect import signature
 
 import pytest
 
+# Mark as quick (unit tests)
+pytestmark = pytest.mark.quick
+
+
 from meeting_notes_ai.hipaa.dashboard import ComplianceService
 
 # ═══════════════════════════════════════════════════════════════════════════════

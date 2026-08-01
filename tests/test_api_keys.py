@@ -13,6 +13,10 @@ from __future__ import annotations
 from inspect import signature
 
 import pytest
+
+# Mark as quick (unit tests)
+pytestmark = pytest.mark.quick
+
 from fastapi import FastAPI
 
 # ── Helpers (mirror test_app.py) ─────────────────────────────────────────────

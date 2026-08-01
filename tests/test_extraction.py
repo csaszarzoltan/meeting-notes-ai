@@ -7,6 +7,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+# Mark as quick (unit tests)
+pytestmark = pytest.mark.quick
+
+
 from meeting_notes_ai.models import (
     ActionItem,
     ExtractionResult,

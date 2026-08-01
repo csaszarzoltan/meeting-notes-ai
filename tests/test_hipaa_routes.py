@@ -18,6 +18,10 @@ from __future__ import annotations
 
 import pytest
 
+# Mark as integration (uses TestClient/AsyncClient)
+pytestmark = pytest.mark.integration
+
+
 from meeting_notes_ai.auth import create_access_token
 from meeting_notes_ai.hipaa.audit_logger import AuditEntry, AuditLogger
 from meeting_notes_ai.hipaa.config import HIPAAConfig

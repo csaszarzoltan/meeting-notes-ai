@@ -18,6 +18,10 @@ from inspect import signature
 from uuid import uuid4
 
 import pytest
+
+# Mark as quick (unit tests)
+pytestmark = pytest.mark.quick
+
 from fastapi import FastAPI
 from pydantic import BaseModel
 

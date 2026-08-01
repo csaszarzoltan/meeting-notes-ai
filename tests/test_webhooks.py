@@ -9,6 +9,10 @@ from inspect import signature
 
 import pytest
 
+# Mark as integration (uses TestClient/AsyncClient)
+pytestmark = pytest.mark.integration
+
+
 # ── Interface Tests (must PASS) ───────────────────────────────────────────────
 
 

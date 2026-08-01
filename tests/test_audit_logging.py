@@ -16,6 +16,10 @@ from pathlib import Path
 
 import pytest
 
+# Mark as quick (unit tests)
+pytestmark = pytest.mark.quick
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Interface Tests (must PASS)
 # ═══════════════════════════════════════════════════════════════════════════════

@@ -9,6 +9,11 @@ from meeting_notes_ai.models import (
     MeetingMode,
 )
 from meeting_notes_ai.services.export import ExportService
+import pytest
+
+# Mark as quick (unit tests)
+pytestmark = pytest.mark.quick
+
 
 # ── Interface Tests (must PASS) ───────────────────────────────────────────────
 

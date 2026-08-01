@@ -13,6 +13,10 @@ from inspect import signature
 
 import pytest
 
+# Mark as quick (unit tests)
+pytestmark = pytest.mark.quick
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Interface Tests (must PASS once implemented)
 # ═══════════════════════════════════════════════════════════════════════════════

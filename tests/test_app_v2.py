@@ -7,6 +7,10 @@ team, and webhook routers correctly.
 from __future__ import annotations
 
 import pytest
+
+# Mark as integration (uses TestClient/AsyncClient)
+pytestmark = pytest.mark.integration
+
 from fastapi import FastAPI
 
 from meeting_notes_ai.main import app
