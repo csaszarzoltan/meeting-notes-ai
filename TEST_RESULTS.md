@@ -30,7 +30,7 @@ Result: **99 passed**.
 .venv/bin/python -m pytest -q -n 0 --tb=short
 ```
 
-Result: **exit code 0, zero failures** across **842 collected tests**. Expected deferred scenarios remain reported as `xfail` rather than being deleted or hidden.
+Result: **exit code 0, zero failures** across **845 collected tests**. Expected deferred scenarios remain reported as `xfail` rather than being deleted or hidden.
 
 ## Static validation
 
@@ -48,3 +48,8 @@ Ruff passes for all newly added and modified production modules.
 ## Production-readiness continuation
 
 Additional RED-first acceptance tests cover production secret rejection, secure secret acceptance, the local database default, active API-key authentication, invalid-key rejection, and last-used tracking.
+
+
+## Operational-readiness continuation
+
+Three additional RED-first tests cover the database readiness probe, browser security headers, and no-store behavior for sensitive API responses. The Alembic migration was also smoke-tested against a pre-v0.6 SQLite schema.

@@ -8,6 +8,8 @@ RUN pip install --no-cache-dir uv
 # Copy project files
 COPY pyproject.toml uv.lock /app/
 COPY src/ /app/src/
+COPY alembic.ini /app/alembic.ini
+COPY migrations/ /app/migrations/
 
 # Install everything to system Python (no venv) — uvicorn goes on PATH
 RUN uv pip install --system -e . && \
@@ -20,5 +22,8 @@ RUN useradd --create-home --shell /bin/bash app \
 USER app
 
 EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3)" || exit 1
 
 CMD ["sh", "-c", "uvicorn meeting_notes_ai.main:app --host 0.0.0.0 --port ${PORT:-8000}"]

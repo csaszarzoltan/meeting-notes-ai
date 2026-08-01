@@ -18,7 +18,7 @@ from meeting_notes_ai.db.session import (
     is_session_factory_configured,
     set_session_factory,
 )
-from meeting_notes_ai.middleware import RateLimitMiddleware
+from meeting_notes_ai.middleware import RateLimitMiddleware, SecurityHeadersMiddleware
 from meeting_notes_ai.routes import (
     admin,
     api_keys,
@@ -28,6 +28,7 @@ from meeting_notes_ai.routes import (
     meetings,
     product_app,
     public,
+    readiness,
     sharing,
     teams,
     webhooks,
@@ -61,12 +62,14 @@ app = FastAPI(
 
 # The documented application contract includes rate-limit headers on /healthz.
 # Standalone middleware usage still skips /healthz by default.
+app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(
     RateLimitMiddleware,
     exclude_paths={"/api/v1/admin/users/user-001/tier"},
 )
 
 app.include_router(health.router)
+app.include_router(readiness.router)
 app.include_router(admin.router)
 app.include_router(api_keys.router)
 app.include_router(product_app.router)

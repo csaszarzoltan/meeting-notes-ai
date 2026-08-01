@@ -1,6 +1,6 @@
 # Migration notes for v0.6.0
 
-Development databases created with `init_db()` receive the new columns and tables automatically. Existing production databases require a migration before starting v0.6.0.
+Development databases created with `init_db()` receive the new columns and tables automatically. Existing production databases require a migration before starting v0.6.x. Run `uv run alembic upgrade head`.
 
 ## Schema changes
 

@@ -100,3 +100,8 @@ After this continuation, the full repository suite exits successfully with zero 
 ## Continuation: startup and credential readiness
 
 The final continuation introduced a FastAPI lifespan that validates production configuration, initializes the database automatically, and closes owned engines cleanly. Configuration now has one authoritative source for environment, database URL, JWT secret, and administrator controls. Active API keys can authenticate through `X-API-Key`, with prefix narrowing, constant-time digest verification, owner-state checks, and last-used tracking. PostgreSQL deployments now include the async driver required by the documented Railway URL.
+
+
+## Continuation: operational readiness
+
+The operational pass added database-backed readiness, security headers, cache prevention for sensitive API responses, an executable Alembic migration environment, a verified tier/API-key migration, and a Docker-level health check. Liveness and readiness are now separate so an orchestrator can distinguish a running process from a service that can safely accept work.
