@@ -46,7 +46,7 @@ class TestAppInterface:
         """App should be a FastAPI instance with expected metadata."""
         assert isinstance(app, FastAPI)
         assert app.title == "MeetingNotesAI"
-        assert app.version == "0.5.0"
+        assert app.version == "0.6.0"
 
     def test_health_router_included(self):
         """Health check router should be included in the app."""
@@ -93,7 +93,7 @@ class TestAppBehavioral:
 
         result = asyncio.run(health_check())
         assert result.status == "healthy"
-        assert result.version == "0.1.0"
+        assert result.version == "0.6.0"
         assert "app" in result.services
 
     def test_client_get_healthz_returns_200(self):
@@ -103,7 +103,7 @@ class TestAppBehavioral:
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "healthy"
-        assert data["version"] == "0.1.0"
+        assert data["version"] == "0.6.0"
 
 
 # ── Rate Limit Response Headers (P1) ──────────────────────────────────────────
@@ -185,19 +185,16 @@ class TestRateLimitHeaders:
 
     # ── Behavioral tests (xfail until P1) ──────────────────────────────────
 
-    @pytest.mark.xfail(strict=True)
     def test_x_ratelimit_remaining_decrements(self):
         """X-RateLimit-Remaining decrements with each request."""
         client = TestClient(app)
-        resp1 = client.get("/healthz")
+        headers = {"X-Forwarded-For": "198.51.100.77"}
+        resp1 = client.get("/healthz", headers=headers)
         remaining1 = int(resp1.headers["X-RateLimit-Remaining"])
-        resp2 = client.get("/healthz")
+        resp2 = client.get("/healthz", headers=headers)
         remaining2 = int(resp2.headers["X-RateLimit-Remaining"])
-        assert remaining2 < remaining1, (
-            f"Remaining did not decrement: {remaining1} → {remaining2}"
-        )
+        assert remaining2 < remaining1, f"Remaining did not decrement: {remaining1} → {remaining2}"
 
-    @pytest.mark.xfail(strict=True)
     def test_x_ratelimit_reset_is_positive(self):
         """X-RateLimit-Reset value is a positive integer."""
         client = TestClient(app)
@@ -205,7 +202,6 @@ class TestRateLimitHeaders:
         value = int(response.headers["X-RateLimit-Reset"])
         assert value > 0, f"Expected positive reset seconds, got {value}"
 
-    @pytest.mark.xfail(strict=True)
     def test_429_retry_after_is_seconds_to_next_token(self):
         """429 Retry-After is seconds until bucket has at least 1 token."""
         client = TestClient(app)

@@ -5,7 +5,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # ── Shared Enums ──────────────────────────────────────────────────────────────
 
@@ -35,11 +35,16 @@ class MeetingRequest(BaseModel):
 class MeetingResponse(BaseModel):
     id: str = ""
     transcript: str = ""
-    action_items: list[ActionItem] = []
-    decisions: list[str] = []
-    key_points: list[str] = []
+    summary: str = ""
+    action_items: list[ActionItem] = Field(default_factory=list)
+    decisions: list[str] = Field(default_factory=list)
+    key_points: list[str] = Field(default_factory=list)
     mode: MeetingMode = MeetingMode.GENERAL
-    metadata: dict = {}
+    review_status: Literal["ready", "needs_review"] = "ready"
+    phi_redacted: bool = False
+    redaction_matches: int = 0
+    warnings: list[str] = Field(default_factory=list)
+    metadata: dict = Field(default_factory=dict)
 
 
 # ── Health ────────────────────────────────────────────────────────────────────

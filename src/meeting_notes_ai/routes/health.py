@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
+from meeting_notes_ai import __version__
 from meeting_notes_ai.models import HealthResponse, ServiceHealth
 
 router = APIRouter(tags=["health"])
@@ -32,6 +33,6 @@ async def health_check() -> HealthResponse:
 
     return HealthResponse(
         status=status,
-        version="0.1.0",
+        version=__version__,
         services=services,
     )

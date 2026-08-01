@@ -80,9 +80,7 @@ class TestTierConfigInterface:
     def test_settings_has_burst_factor(self) -> None:
         """RATE_LIMIT_BURST_FACTOR defaults to 1.0."""
         s = Settings()
-        assert hasattr(s, "RATE_LIMIT_BURST_FACTOR"), (
-            "Settings missing RATE_LIMIT_BURST_FACTOR"
-        )
+        assert hasattr(s, "RATE_LIMIT_BURST_FACTOR"), "Settings missing RATE_LIMIT_BURST_FACTOR"
         assert isinstance(s.RATE_LIMIT_BURST_FACTOR, int | float)
         assert s.RATE_LIMIT_BURST_FACTOR == 1.0
 
@@ -114,9 +112,7 @@ class TestUserTierInterface:
             assert User is not None, "User model not found in db.models"
             # Check tier column via SQLAlchemy Column or similar
             tier_col = getattr(User, "tier", None)
-            assert tier_col is not None, (
-                "User model missing 'tier' attribute/column"
-            )
+            assert tier_col is not None, "User model missing 'tier' attribute/column"
         except (ImportError, ModuleNotFoundError):
             raise AssertionError(
                 "meeting_notes_ai.db.models module does not exist — "
@@ -135,9 +131,7 @@ class TestUserTierInterface:
             tier_col = getattr(User, "tier", None)
             if tier_col is not None and hasattr(tier_col, "default"):
                 default = (
-                    tier_col.default.arg
-                    if hasattr(tier_col.default, "arg")
-                    else tier_col.default
+                    tier_col.default.arg if hasattr(tier_col.default, "arg") else tier_col.default
                 )
                 assert default == "free", f"Expected default='free', got {default!r}"
         except (ImportError, ModuleNotFoundError):
@@ -146,12 +140,8 @@ class TestUserTierInterface:
     def test_admin_tier_change_endpoint_exists(self) -> None:
         """PATCH /api/v1/admin/users/{user_id}/tier is registered."""
         route = _find_route(app, "/api/v1/admin/users/{user_id}/tier")
-        assert route is not None, (
-            "Admin tier-change endpoint not found in app routes"
-        )
-        assert "PATCH" in route.methods, (
-            f"Expected PATCH method, got {route.methods}"
-        )
+        assert route is not None, "Admin tier-change endpoint not found in app routes"
+        assert "PATCH" in route.methods, f"Expected PATCH method, got {route.methods}"
 
     def test_admin_tier_change_admin_only(self) -> None:
         """Non-admin caller gets 403 on tier-change endpoint."""
@@ -201,7 +191,6 @@ class TestAdminTierChangeEndpointInterface:
 class TestTierConfigBehavioral:
     """Verify env var overrides and tier-based limits (Task 1.2)."""
 
-    @pytest.mark.xfail(strict=True)
     def test_env_var_overrides_free_daily(self) -> None:
         """MEETING_RATE_LIMIT_FREE_DAILY env var changes free limit."""
         import os
@@ -215,7 +204,6 @@ class TestTierConfigBehavioral:
         finally:
             del os.environ["MEETING_RATE_LIMIT_FREE_DAILY"]
 
-    @pytest.mark.xfail(strict=True)
     def test_env_var_overrides_pro_daily(self) -> None:
         """MEETING_RATE_LIMIT_PRO_DAILY env var changes pro limit."""
         import os
@@ -229,7 +217,6 @@ class TestTierConfigBehavioral:
         finally:
             del os.environ["MEETING_RATE_LIMIT_PRO_DAILY"]
 
-    @pytest.mark.xfail(strict=True)
     def test_burst_factor_affects_capacity(self) -> None:
         """RATE_LIMIT_BURST_FACTOR multiplies daily limit for bucket capacity."""
         import os
@@ -324,7 +311,6 @@ class TestAdminTierChangeBehavioral:
             f"Expected enterprise unlimited limit, got {limit!r}"
         )
 
-    @pytest.mark.xfail(strict=True)
     def test_non_admin_cannot_change_tier(self) -> None:
         """Non-admin caller receives 403."""
         client = TestClient(app)

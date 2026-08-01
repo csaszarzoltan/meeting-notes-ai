@@ -8,12 +8,13 @@ Endpoints:
 
 from __future__ import annotations
 
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+import bcrypt
 from fastapi import APIRouter, Depends, Header, HTTPException
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,11 +26,9 @@ router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
 # ── Configuration ───────────────────────────────────────────────────────────────
 
-SECRET_KEY = "meeting-notes-ai-secret-key-change-in-production"  # TODO: move to env
+SECRET_KEY = os.getenv("JWT_SECRET", "meeting-notes-ai-secret-key-change-in-production")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_HOURS = 24
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 # ── Request/Response Schemas ────────────────────────────────────────────────────
@@ -63,28 +62,24 @@ class UserResponse(BaseModel):
 
 
 async def hash_password(password: str) -> str:
-    """Hash a plaintext password with bcrypt.
+    """Hash a password with bcrypt without blocking the event loop."""
+    import asyncio
 
-    Args:
-        password: Plaintext password.
-
-    Returns:
-        Bcrypt-hashed password string.
-    """
-    return pwd_context.hash(password)
+    return await asyncio.to_thread(
+        lambda: bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("ascii")
+    )
 
 
 async def verify_password(plain: str, hashed: str) -> bool:
-    """Verify a plaintext password against a bcrypt hash.
+    """Verify a bcrypt password safely; malformed hashes return False."""
+    import asyncio
 
-    Args:
-        plain: Plaintext password to verify.
-        hashed: Bcrypt hash to check against.
-
-    Returns:
-        True if password matches, False otherwise.
-    """
-    return pwd_context.verify(plain, hashed)
+    try:
+        return await asyncio.to_thread(
+            bcrypt.checkpw, plain.encode("utf-8"), hashed.encode("ascii")
+        )
+    except (ValueError, TypeError):
+        return False
 
 
 async def create_access_token(user_id: str, expires_delta_hours: int = 24) -> str:
@@ -142,7 +137,7 @@ async def get_current_user(
     if authorization is None or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Invalid authorization header")
 
-    token = authorization[len("Bearer "):]
+    token = authorization[len("Bearer ") :]
     payload = await decode_access_token(token)
     user_id = payload.get("sub")
     if user_id is None:

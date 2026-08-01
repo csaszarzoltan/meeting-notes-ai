@@ -171,12 +171,10 @@ class TestTokenBucketRateLimiterBehavioral:
 
     # ── allow() behavior ─────────────────────────────────────────────────
 
-    @pytest.mark.xfail(strict=True, reason="Not yet implemented — RED phase")
     def test_allow_returns_true_when_tokens_available(self, limiter):
         """allow() returns True when tokens remain in the bucket."""
         assert limiter.allow("test-key") is True
 
-    @pytest.mark.xfail(strict=True, reason="Not yet implemented — RED phase")
     def test_allow_returns_false_when_empty(self, small_limiter):
         """allow() returns False when bucket is empty after consuming all tokens."""
         # Consume the single token
@@ -184,7 +182,6 @@ class TestTokenBucketRateLimiterBehavioral:
         # Second call should fail
         assert small_limiter.allow("test-key") is False
 
-    @pytest.mark.xfail(strict=True, reason="Not yet implemented — RED phase")
     def test_allow_respects_separate_keys(self, small_limiter):
         """Each key has its own bucket — one key being empty doesn't affect another."""
         # Consume key-a's token
@@ -194,7 +191,6 @@ class TestTokenBucketRateLimiterBehavioral:
         # key-a should now be empty
         assert small_limiter.allow("key-a") is False
 
-    @pytest.mark.xfail(strict=True, reason="Not yet implemented — RED phase")
     def test_tokens_refill_over_time(self, limiter):
         """Tokens gradually refill at the configured fill_rate."""
         import time
@@ -210,7 +206,6 @@ class TestTokenBucketRateLimiterBehavioral:
         # Now should have 1 token available
         assert limiter.allow(key) is True
 
-    @pytest.mark.xfail(strict=True, reason="Not yet implemented — RED phase")
     def test_allow_does_not_block_on_success(self, limiter):
         """allow() returns quickly when tokens are available (no blocking)."""
         import time
@@ -224,7 +219,6 @@ class TestTokenBucketRateLimiterBehavioral:
 
     # ── get_remaining() behavior ──────────────────────────────────────────
 
-    @pytest.mark.xfail(strict=True, reason="Not yet implemented — RED phase")
     def test_get_remaining_returns_tuple(self, limiter):
         """get_remaining() returns a (int, float) tuple."""
         result = limiter.get_remaining("remaining-key")
@@ -234,20 +228,17 @@ class TestTokenBucketRateLimiterBehavioral:
         assert isinstance(remaining, int) or isinstance(remaining, float)
         assert isinstance(reset_after, (int, float))
 
-    @pytest.mark.xfail(strict=True, reason="Not yet implemented — RED phase")
     def test_get_remaining_starts_at_capacity(self, limiter):
         """get_remaining() returns capacity for a fresh key."""
         remaining, _ = limiter.get_remaining("fresh-key")
         assert remaining == 10  # capacity
 
-    @pytest.mark.xfail(strict=True, reason="Not yet implemented — RED phase")
     def test_get_remaining_decrements_after_allow(self, limiter):
         """get_remaining() shows reduced count after consuming tokens."""
         limiter.allow("decrement-key")
         remaining, _ = limiter.get_remaining("decrement-key")
         assert remaining == 9  # was 10, consumed 1
 
-    @pytest.mark.xfail(strict=True, reason="Not yet implemented — RED phase")
     def test_get_remaining_never_negative(self, small_limiter):
         """get_remaining() never returns a negative value."""
         # Consume the only token
@@ -259,7 +250,6 @@ class TestTokenBucketRateLimiterBehavioral:
         after_second, _ = small_limiter.get_remaining("neg-key")
         assert after_second >= 0
 
-    @pytest.mark.xfail(strict=True, reason="Not yet implemented — RED phase")
     def test_get_remaining_reset_after_is_positive(self, limiter):
         """The reset_after (seconds_until_full) is a positive number."""
         limiter.allow("reset-after-key")
@@ -268,7 +258,6 @@ class TestTokenBucketRateLimiterBehavioral:
 
     # ── reset() behavior ──────────────────────────────────────────────────
 
-    @pytest.mark.xfail(strict=True, reason="Not yet implemented — RED phase")
     def test_reset_restores_capacity(self, small_limiter):
         """reset() restores bucket to full capacity."""
         # Empty the bucket
@@ -279,7 +268,6 @@ class TestTokenBucketRateLimiterBehavioral:
         # Should now be allowed again
         assert small_limiter.allow("reset-key") is True
 
-    @pytest.mark.xfail(strict=True, reason="Not yet implemented — RED phase")
     def test_reset_does_not_affect_other_keys(self, limiter):
         """reset() on one key does not affect other keys' buckets."""
         limiter.allow("key-a")
@@ -293,7 +281,6 @@ class TestTokenBucketRateLimiterBehavioral:
 
     # ── Monotonic time ────────────────────────────────────────────────────
 
-    @pytest.mark.xfail(strict=True, reason="Not yet implemented — RED phase")
     def test_uses_monotonic_time(self, limiter):
         """Rate limiter uses time.monotonic() (not time.time()) to avoid clock skew."""
         import time

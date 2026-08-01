@@ -56,9 +56,7 @@ class WebhookEvent(str, PyEnum):
 class TimestampMixin:
     """Add created_at and updated_at columns."""
 
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), onupdate=func.now(), nullable=True
     )
@@ -70,19 +68,43 @@ class TimestampMixin:
 class User(Base, TimestampMixin):
     __tablename__ = "users"
 
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
-    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
     display_name: Mapped[str] = mapped_column(String(100), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    tier: Mapped[str] = mapped_column(String(20), default="free", nullable=False)
 
     # Relationships
     team_memberships: Mapped[list["TeamMember"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
     meetings: Mapped[list["Meeting"]] = relationship(back_populates="user")
+    api_keys: Mapped[list["ApiKey"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+
+
+# ── API keys ───────────────────────────────────────────────────────────────────
+
+
+class ApiKey(Base, TimestampMixin):
+    """Hashed, revocable API credential. The plaintext key is never stored."""
+
+    __tablename__ = "api_keys"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id"), nullable=False, index=True
+    )
+    key_prefix: Mapped[str] = mapped_column(String(12), nullable=False, index=True)
+    hashed_key: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    tier: Mapped[str] = mapped_column(String(20), default="free", nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    user: Mapped["User"] = relationship(back_populates="api_keys")
 
 
 # ── Team ───────────────────────────────────────────────────────────────────────
@@ -91,14 +113,10 @@ class User(Base, TimestampMixin):
 class Team(Base, TimestampMixin):
     __tablename__ = "teams"
 
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
-    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=True)
-    owner_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("users.id"), nullable=False
-    )
+    owner_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False)
 
     # Relationships
     owner: Mapped["User"] = relationship()
@@ -117,18 +135,10 @@ class Team(Base, TimestampMixin):
 class TeamMember(Base, TimestampMixin):
     __tablename__ = "team_members"
 
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
-    )
-    team_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("teams.id"), nullable=False
-    )
-    user_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("users.id"), nullable=False
-    )
-    role: Mapped[TeamRole] = mapped_column(
-        Enum(TeamRole), default=TeamRole.MEMBER, nullable=False
-    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    team_id: Mapped[str] = mapped_column(String(36), ForeignKey("teams.id"), nullable=False)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False)
+    role: Mapped[TeamRole] = mapped_column(Enum(TeamRole), default=TeamRole.MEMBER, nullable=False)
 
     # Relationships
     team: Mapped["Team"] = relationship(back_populates="members")
@@ -141,13 +151,9 @@ class TeamMember(Base, TimestampMixin):
 class Meeting(Base, TimestampMixin):
     __tablename__ = "meetings"
 
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
-    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     title: Mapped[str] = mapped_column(String(300), nullable=True)
-    user_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("users.id"), nullable=False
-    )
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False)
     team_id: Mapped[Optional[str]] = mapped_column(
         String(36), ForeignKey("teams.id"), nullable=True
     )
@@ -173,24 +179,14 @@ class Meeting(Base, TimestampMixin):
 class SharedLink(Base, TimestampMixin):
     __tablename__ = "shared_links"
 
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
-    )
-    meeting_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("meetings.id"), nullable=False
-    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    meeting_id: Mapped[str] = mapped_column(String(36), ForeignKey("meetings.id"), nullable=False)
     team_id: Mapped[Optional[str]] = mapped_column(
         String(36), ForeignKey("teams.id"), nullable=True
     )
-    created_by: Mapped[str] = mapped_column(
-        String(36), ForeignKey("users.id"), nullable=False
-    )
-    token: Mapped[str] = mapped_column(
-        String(100), unique=True, nullable=False, index=True
-    )
-    expires_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    created_by: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False)
+    token: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     # Relationships
@@ -204,12 +200,8 @@ class SharedLink(Base, TimestampMixin):
 class BatchJob(Base, TimestampMixin):
     __tablename__ = "batch_jobs"
 
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
-    )
-    user_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("users.id"), nullable=False
-    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False)
     team_id: Mapped[Optional[str]] = mapped_column(
         String(36), ForeignKey("teams.id"), nullable=True
     )
@@ -233,9 +225,7 @@ class BatchJob(Base, TimestampMixin):
 class BatchFileResult(Base, TimestampMixin):
     __tablename__ = "batch_file_results"
 
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
-    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     batch_job_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("batch_jobs.id"), nullable=False
     )
@@ -248,9 +238,7 @@ class BatchFileResult(Base, TimestampMixin):
     )
     transcript_summary: Mapped[str] = mapped_column(Text, nullable=True)
     error_message: Mapped[str] = mapped_column(Text, nullable=True)
-    processing_time_ms: Mapped[Optional[float]] = mapped_column(
-        Float, nullable=True
-    )
+    processing_time_ms: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
     # Relationships
     batch_job: Mapped["BatchJob"] = relationship(back_populates="file_results")
@@ -262,12 +250,8 @@ class BatchFileResult(Base, TimestampMixin):
 class WebhookSubscription(Base, TimestampMixin):
     __tablename__ = "webhook_subscriptions"
 
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
-    )
-    team_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("teams.id"), nullable=False
-    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    team_id: Mapped[str] = mapped_column(String(36), ForeignKey("teams.id"), nullable=False)
     url: Mapped[str] = mapped_column(String(500), nullable=False)
     secret: Mapped[str] = mapped_column(String(255), nullable=True)
     events: Mapped[str] = mapped_column(Text, nullable=False, default="batch.completed")

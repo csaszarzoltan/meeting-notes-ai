@@ -1,4 +1,5 @@
 """Application configuration loaded from environment variables."""
+
 from __future__ import annotations
 
 import os
@@ -17,6 +18,21 @@ class Settings:
         default_factory=lambda: int(os.getenv("MAX_AUDIO_SIZE_MB", "25"))
     )
     log_level: str = field(default_factory=lambda: os.getenv("LOG_LEVEL", "INFO"))
+    RATE_LIMIT_FREE_DAILY: int = field(
+        default_factory=lambda: int(os.getenv("MEETING_RATE_LIMIT_FREE_DAILY", "100"))
+    )
+    RATE_LIMIT_PRO_DAILY: int = field(
+        default_factory=lambda: int(os.getenv("MEETING_RATE_LIMIT_PRO_DAILY", "10000"))
+    )
+    RATE_LIMIT_ENTERPRISE_UNLIMITED: bool = field(
+        default_factory=lambda: (
+            os.getenv("MEETING_RATE_LIMIT_ENTERPRISE_UNLIMITED", "true").lower()
+            in {"1", "true", "yes"}
+        )
+    )
+    RATE_LIMIT_BURST_FACTOR: float = field(
+        default_factory=lambda: float(os.getenv("MEETING_RATE_LIMIT_BURST_FACTOR", "1.0"))
+    )
 
     # Shared patterns reference
     RAILWAY_HEALTHCHECK_PATH: str = "/healthz"

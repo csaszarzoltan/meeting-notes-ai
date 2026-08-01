@@ -1,6 +1,6 @@
 [project]
 name = "meeting-notes-ai"
-version = "0.5.0"
+version = "0.6.0"
 description = "Micro-SaaS for meeting transcription and structured notes"
 requires-python = ">=3.11"
 dependencies = [
