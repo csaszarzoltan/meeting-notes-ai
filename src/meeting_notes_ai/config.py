@@ -18,6 +18,24 @@ class Settings:
         default_factory=lambda: int(os.getenv("MAX_AUDIO_SIZE_MB", "25"))
     )
     log_level: str = field(default_factory=lambda: os.getenv("LOG_LEVEL", "INFO"))
+    environment: str = field(default_factory=lambda: os.getenv("ENVIRONMENT", "development"))
+    database_url: str = field(
+        default_factory=lambda: os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./meeting_notes.db")
+    )
+    database_echo: bool = field(
+        default_factory=lambda: os.getenv("DATABASE_ECHO", "false").lower() in {"1", "true", "yes"}
+    )
+    jwt_secret: str = field(
+        default_factory=lambda: os.getenv(
+            "JWT_SECRET", "meeting-notes-ai-secret-key-change-in-production"
+        )
+    )
+    admin_api_enabled: bool = field(
+        default_factory=lambda: (
+            os.getenv("ADMIN_API_ENABLED", "false").lower() in {"1", "true", "yes"}
+        )
+    )
+    admin_api_token: str = field(default_factory=lambda: os.getenv("ADMIN_API_TOKEN", ""))
     RATE_LIMIT_FREE_DAILY: int = field(
         default_factory=lambda: int(os.getenv("MEETING_RATE_LIMIT_FREE_DAILY", "100"))
     )

@@ -17,6 +17,11 @@ def set_session_factory(factory: async_sessionmaker[AsyncSession]) -> None:
     _session_factory = factory
 
 
+def is_session_factory_configured() -> bool:
+    """Return whether application or tests already installed a session factory."""
+    return _session_factory is not None
+
+
 async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
     """FastAPI dependency that yields an async database session.
 

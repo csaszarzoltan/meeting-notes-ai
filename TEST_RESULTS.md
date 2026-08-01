@@ -30,7 +30,7 @@ Result: **99 passed**.
 .venv/bin/python -m pytest -q -n 0 --tb=short
 ```
 
-Result: **exit code 0, zero failures** across **836 collected tests**. Expected deferred scenarios remain reported as `xfail` rather than being deleted or hidden.
+Result: **exit code 0, zero failures** across **842 collected tests**. Expected deferred scenarios remain reported as `xfail` rather than being deleted or hidden.
 
 ## Static validation
 
@@ -43,3 +43,8 @@ Ruff passes for all newly added and modified production modules.
 - Browser automation and automated WCAG tooling are not part of the original stack. Accessibility is covered with semantic contract tests and manually auditable markup.
 - External OpenAI calls stay mocked in deterministic CI.
 - The in-memory rate limiter and telemetry collector are single-process implementations. Production multi-instance deployment should use Redis or another shared atomic store.
+
+
+## Production-readiness continuation
+
+Additional RED-first acceptance tests cover production secret rejection, secure secret acceptance, the local database default, active API-key authentication, invalid-key rejection, and last-used tracking.

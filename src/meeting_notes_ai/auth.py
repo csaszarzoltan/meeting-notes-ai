@@ -8,7 +8,8 @@ Endpoints:
 
 from __future__ import annotations
 
-import os
+import hashlib
+import hmac
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -19,14 +20,15 @@ from pydantic import BaseModel, EmailStr
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from meeting_notes_ai.db.models import TeamMember, User
+from meeting_notes_ai.config import settings
+from meeting_notes_ai.db.models import ApiKey, TeamMember, User
 from meeting_notes_ai.db.session import get_db_session
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
 # ── Configuration ───────────────────────────────────────────────────────────────
 
-SECRET_KEY = os.getenv("JWT_SECRET", "meeting-notes-ai-secret-key-change-in-production")
+SECRET_KEY = settings.jwt_secret
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_HOURS = 24
 
@@ -119,21 +121,44 @@ async def decode_access_token(token: str) -> dict[str, Any]:
 
 async def get_current_user(
     authorization: str | None = Header(None, description="Bearer token"),
+    x_api_key: str | None = Header(None, alias="X-API-Key"),
     db: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
-    """FastAPI dependency: extract and validate current user from Bearer token.
+    """Authenticate with a JWT bearer token or a revocable API key.
 
-    Usage:
-        @router.get("/me")
-        async def get_me(user: dict = Depends(get_current_user)):
-            ...
-
-    Returns:
-        Dict with user_id, email, and other user fields.
-
-    Raises:
-        HTTPException(401) if token is missing or invalid.
+    API keys are supplied through ``X-API-Key``. Only a short prefix and SHA-256
+    digest are persisted; the full plaintext credential is never stored.
     """
+    if x_api_key:
+        prefix = x_api_key[:8]
+        digest = hashlib.sha256(x_api_key.encode("utf-8")).hexdigest()
+        result = await db.execute(
+            select(ApiKey).where(
+                ApiKey.key_prefix == prefix,
+                ApiKey.is_active.is_(True),
+            )
+        )
+        record = next(
+            (
+                item
+                for item in result.scalars().all()
+                if hmac.compare_digest(item.hashed_key, digest)
+            ),
+            None,
+        )
+        if record is None or not record.user.is_active:
+            raise HTTPException(status_code=401, detail="Invalid API key")
+        record.last_used_at = datetime.now(timezone.utc)
+        await db.flush()
+        return {
+            "user_id": record.user.id,
+            "email": record.user.email,
+            "display_name": record.user.display_name,
+            "is_active": record.user.is_active,
+            "tier": record.tier,
+            "auth_method": "api_key",
+        }
+
     if authorization is None or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Invalid authorization header")
 
@@ -155,6 +180,8 @@ async def get_current_user(
         "email": user.email,
         "display_name": user.display_name,
         "is_active": user.is_active,
+        "tier": user.tier,
+        "auth_method": "jwt",
     }
 
 

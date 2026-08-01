@@ -95,3 +95,8 @@ The continuation pass also implemented:
 - Production migration notes for the new schema.
 
 After this continuation, the full repository suite exits successfully with zero failures across 836 collected tests.
+
+
+## Continuation: startup and credential readiness
+
+The final continuation introduced a FastAPI lifespan that validates production configuration, initializes the database automatically, and closes owned engines cleanly. Configuration now has one authoritative source for environment, database URL, JWT secret, and administrator controls. Active API keys can authenticate through `X-API-Key`, with prefix narrowing, constant-time digest verification, owner-state checks, and last-used tracking. PostgreSQL deployments now include the async driver required by the documented Railway URL.

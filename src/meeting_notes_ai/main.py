@@ -1,8 +1,23 @@
 """MeetingNotesAI FastAPI application entry point."""
 
+from __future__ import annotations
+
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 
 from meeting_notes_ai import __version__, auth
+from meeting_notes_ai.config import settings
+from meeting_notes_ai.db.engine import (
+    close_db,
+    create_db_engine,
+    create_session_factory,
+    init_db,
+)
+from meeting_notes_ai.db.session import (
+    is_session_factory_configured,
+    set_session_factory,
+)
 from meeting_notes_ai.middleware import RateLimitMiddleware
 from meeting_notes_ai.routes import (
     admin,
@@ -17,14 +32,39 @@ from meeting_notes_ai.routes import (
     teams,
     webhooks,
 )
+from meeting_notes_ai.security_config import validate_production_settings
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Validate security and provision the default database when needed."""
+    validate_production_settings(settings)
+    engine = None
+    if not is_session_factory_configured():
+        engine = create_db_engine(settings.database_url, echo=settings.database_echo)
+        set_session_factory(create_session_factory(engine))
+        await init_db(engine)
+        app.state.database_engine = engine
+    try:
+        yield
+    finally:
+        if engine is not None:
+            await close_db(engine)
+
 
 app = FastAPI(
     title="MeetingNotesAI",
     version=__version__,
     description="Accessible meeting transcription and review workspace",
+    lifespan=lifespan,
 )
 
-app.add_middleware(RateLimitMiddleware, exclude_paths={"/api/v1/admin/users/user-001/tier"})
+# The documented application contract includes rate-limit headers on /healthz.
+# Standalone middleware usage still skips /healthz by default.
+app.add_middleware(
+    RateLimitMiddleware,
+    exclude_paths={"/api/v1/admin/users/user-001/tier"},
+)
 
 app.include_router(health.router)
 app.include_router(admin.router)
@@ -35,10 +75,6 @@ app.include_router(auth.router)
 app.include_router(batches.router)
 app.include_router(teams.router)
 app.include_router(webhooks.router)
-
-# v0.3.0 — Meeting Sharing
 app.include_router(sharing.router)
 app.include_router(public.router)
-
-# v0.5.0 — HIPAA compliance REST endpoints
 app.include_router(hipaa.router)

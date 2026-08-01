@@ -2,7 +2,7 @@
 
 Micro-SaaS for meeting transcription and structured notes.
 
-![Version](https://img.shields.io/badge/version-0.6.0-blue)
+![Version](https://img.shields.io/badge/version-0.6.1-blue)
 ![Python](https://img.shields.io/badge/python-3.11+-green)
 ![HIPAA](https://img.shields.io/badge/HIPAA-ready-8A2BE2)
 
@@ -635,4 +635,4 @@ Test coverage by release:
 
 See `railway.toml` for service configuration.
 
-> **v0.6.0 user workflow update:** Open `/app` for an accessible upload, processing-status, and review experience. Healthcare meetings now default to PHI redaction and are marked `needs_review`. See [IMPLEMENTATION_REPORT.md](IMPLEMENTATION_REPORT.md) and [TEST_RESULTS.md](TEST_RESULTS.md).
+> **v0.6.1 production-readiness update:** Open `/app` for an accessible upload, processing-status, and review experience. Healthcare meetings now default to PHI redaction and are marked `needs_review`. See [IMPLEMENTATION_REPORT.md](IMPLEMENTATION_REPORT.md) and [TEST_RESULTS.md](TEST_RESULTS.md).

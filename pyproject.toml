@@ -1,6 +1,6 @@
 [project]
 name = "meeting-notes-ai"
-version = "0.6.0"
+version = "0.6.1"
 description = "Micro-SaaS for meeting transcription and structured notes"
 requires-python = ">=3.11"
 dependencies = [
@@ -17,6 +17,7 @@ dependencies = [
     "jinja2>=3.1.0",
     "fpdf2>=2.8.0",
     "cryptography>=42.0.0",
+    "asyncpg>=0.30.0",
 ]
 
 [tool.pytest.ini_options]
