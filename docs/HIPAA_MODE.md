@@ -1,13 +1,12 @@
 # HIPAA Mode — MeetingNotesAI
 
-**Version:** 0.5.0
-
+**Version:** 0.7.0
 HIPAA-compliant healthcare mode for MeetingNotesAI. This document covers the
-HIPAA compliance suite shipped in v0.5.0: PHI redaction, audit logging,
-encryption, BAA lifecycle, and the compliance dashboard — available both as a
-Python library (`meeting_notes_ai.hipaa.*`) and as wired REST endpoints
-(`/api/v1/transcribe`, `/api/v1/audit-logs*`, `/api/v1/encryption/rotate-key`,
-`/api/v1/compliance/*`).
+HIPAA compliance suite: PHI redaction, audit logging, encryption, BAA
+lifecycle, the compliance dashboard, and (since v0.7.0) **storage-at-rest
+encryption + retention** for durable audio and transcript files — available
+both as a Python library (`meeting_notes_ai.hipaa.*` and
+`meeting_notes_ai.storage.*`) and as wired REST endpoints.
 
 > **Scope note (v0.5.0):** the HIPAA suite ships as a **Python library** with a
 > **wired REST surface**. All data endpoints are registered in `main.py` and
@@ -29,10 +28,11 @@ Python library (`meeting_notes_ai.hipaa.*`) and as wired REST endpoints
 6. [Encryption](#encryption)
 7. [BAA Lifecycle](#baa-lifecycle)
 8. [Compliance Dashboard](#compliance-dashboard)
-9. [Configuration Reference](#configuration-reference)
-10. [Library API Surface](#library-api-surface)
-11. [Troubleshooting](#troubleshooting)
-12. [HIPAA Compliance Checklist](#hipaa-compliance-checklist)
+9. [Storage-at-Rest Encryption & Retention](#storage-at-rest-encryption--retention)
+10. [Configuration Reference](#configuration-reference)
+11. [Library API Surface](#library-api-surface)
+12. [Troubleshooting](#troubleshooting)
+13. [HIPAA Compliance Checklist](#hipaa-compliance-checklist)
 
 ---
 
@@ -734,6 +734,132 @@ current active audit file (same caveat as `AuditLogger.query`).
 
 ---
 
+## Storage-at-Rest Encryption & Retention
+
+Since v0.7.0, MeetingNotesAI stores uploaded audio and transcripts durably
+via `meeting_notes_ai.storage`. This section explains how the storage
+encryption and retention engine compose with the existing HIPAA audit
+logging.
+
+### Storage encryption vs field/document encryption
+
+The existing `hipaa.encryption.EncryptionService` provides **field- and
+document-level** envelope encryption (per-tenant DEKs wrapped by a master
+KEK from `HIPAA_MASTER_KEY`). This is designed for encrypting structured
+data in the DB (JSON fields, BAA documents).
+
+The v0.7.0 `storage.encryption.FileEncryptor` is a separate, simpler
+encryptor designed for **large binary objects** (audio files, transcript
+blobs). Key differences:
+
+| Property | `hipaa.encryption.EncryptionService` | `storage.encryption.FileEncryptor` |
+|----------|--------------------------------------|-------------------------------------|
+| Scope | Field/document (JSON-serialisable) | Raw bytes (audio, transcript files) |
+| Key hierarchy | Per-tenant DEKs wrapped by KEK | Per-file DEK wrapped by KEK (stateless) |
+| KEK source | `HIPAA_MASTER_KEY` env | `STORAGE_ENCRYPTION_KEY` env, fallback `HIPAA_MASTER_KEY` |
+| Blob format | JSON envelope with ciphertext fields | Versioned `MNAS1` binary header |
+| Storage backends | DB only | S3, R2, MinIO, local filesystem |
+
+Both use AES-256-GCM under the hood (via the `cryptography` library), but
+they are independent — enabling one does not automatically enable the other.
+
+### Enabling storage encryption
+
+```bash
+STORAGE_ENCRYPTION=aes256gcm
+STORAGE_ENCRYPTION_KEY="your-secret-key"  # or rely on HIPAA_MASTER_KEY
+```
+
+When `STORAGE_ENCRYPTION=aes256gcm`:
+
+1. Every file uploaded via `POST /api/v1/meetings/{id}/audio` is
+   encrypted client-side before writing to the storage backend.
+2. The `StoredFile` row is marked `encryption=aes256gcm`.
+3. Download requests decrypt transparently — the caller sees plaintext.
+4. A tampered blob or wrong key produces `502 storage_decrypt_failed`
+   (never raw ciphertext).
+5. The app **fails fast at startup** if `STORAGE_ENCRYPTION=aes256gcm`
+   is set but neither `STORAGE_ENCRYPTION_KEY` nor `HIPAA_MASTER_KEY`
+   is defined.
+
+> **HIPAA deployments must enable storage encryption.** Cloudflare R2 has
+> no customer-managed server-side keys (SSE-KMS), so client-side
+> encryption is the only backend-agnostic at-rest story.
+
+### Retention engine
+
+HIPAA requires healthcare meeting artifacts to be retained 6–7 years. The
+retention engine enforces this per-workspace:
+
+- **Default retention**: `DEFAULT_RETENTION_DAYS=2190` (6 years, matching
+  `audit_log_retention_days`).
+- **Per-team override**: `PUT /api/v1/teams/{id}/retention` with
+  `retention_days` of `365` (1y), `1095` (3y), `2555` (7y), or `null`
+  (inherit default).
+- **Sweep job**: a background task in the app lifespan calls
+  `sweep_expired()` every `RETENTION_SWEEP_INTERVAL_SECONDS` (default
+  86400). Expired files are deleted from the storage backend, rows
+  soft-deleted, and `storage.expire` audit entries written.
+- **Manual sweep**: `POST /api/v1/admin/retention/sweep` triggers the
+  sweep immediately and returns `{expired, deleted, failed}`.
+
+### Audit trail for storage operations
+
+Every storage operation writes a HIPAA audit entry via the existing
+`AuditLogger`:
+
+| Audit action | When |
+|--------------|------|
+| `storage.upload` | File uploaded and `StoredFile` row created |
+| `storage.download` | Audio or transcript downloaded |
+| `storage.delete` | Audio soft-deleted via `DELETE` endpoint |
+| `storage.expire` | File expired and deleted by sweep job |
+| `storage.decrypt_failed` | Decryption failed (tamper / wrong key) |
+| `retention.policy.update` | Team retention policy changed |
+
+Query storage audit entries via the existing audit log endpoint:
+
+```bash
+curl "http://localhost:8000/api/v1/audit-logs?action=storage.upload" \
+  -H "Authorization: Bearer ***"
+```
+
+### How the pieces fit together
+
+For a HIPAA-compliant deployment, the recommended configuration is:
+
+```bash
+# Encryption
+STORAGE_ENCRYPTION=aes256gcm
+STORAGE_ENCRYPTION_KEY="$(openssl rand -hex 32)"
+HIPAA_MASTER_KEY="$(openssl rand -hex 32)"   # for field/document encryption
+
+# Retention (6-year HIPAA minimum)
+DEFAULT_RETENTION_DAYS=2190
+RETENTION_SWEEP_INTERVAL_SECONDS=86400
+
+# Backend (S3 or R2 for production, local for dev)
+STORAGE_BACKEND=s3
+S3_ENDPOINT_URL=https://<account>.r2.cloudflarestorage.com
+S3_BUCKET=hipaa-meetings
+S3_REGION=auto
+S3_ACCESS_KEY_ID=...
+S3_SECRET_ACCESS_KEY=...
+S3_FORCE_PATH_STYLE=true
+```
+
+This gives you:
+- **Encryption at rest** for both structured data (field-level via
+  `hipaa.encryption`) and raw files (object-level via
+  `storage.encryption`).
+- **Audit logging** for all access and lifecycle events (via
+  `hipaa.audit_logger`).
+- **Retention enforcement** with automatic expiry and sweep.
+- **Backend portability** — same config works on AWS S3, Cloudflare R2,
+  MinIO (dev), or local filesystem.
+
+---
+
 ## Configuration Reference
 
 `HIPAAConfig` is a validated dataclass. All defaults below are verified in
@@ -765,6 +891,18 @@ Environment variables actually read by the code:
 | Variable | Read by | Purpose |
 |----------|---------|---------|
 | `HIPAA_MASTER_KEY` | `EncryptionService.__init__` | KEK seed (SHA-256-derived 32-byte key) |
+| `STORAGE_ENCRYPTION` | `storage.encryption.FileEncryptor` | `none` (default) or `aes256gcm` — enables client-side file encryption |
+| `STORAGE_ENCRYPTION_KEY` | `storage.encryption.FileEncryptor` | KEK for storage files; falls back to `HIPAA_MASTER_KEY` |
+| `STORAGE_BACKEND` | `storage.factory.get_storage_backend` | `local` (default) or `s3` |
+| `STORAGE_LOCAL_DIR` | `storage.local.LocalStorageBackend` | Root directory for local backend (`data/storage`) |
+| `DEFAULT_RETENTION_DAYS` | `storage.retention` | Default file retention in days (`2190` = 6 years) |
+| `RETENTION_SWEEP_INTERVAL_SECONDS` | `storage.retention` | Background sweep cadence (`86400` = 24h) |
+| `S3_ENDPOINT_URL` | `storage.s3.S3StorageBackend` | S3/R2/MinIO endpoint (empty = AWS) |
+| `S3_BUCKET` | `storage.s3.S3StorageBackend` | Bucket name (`meeting-notes-ai`) |
+| `S3_REGION` | `storage.s3.S3StorageBackend` | Region (`us-east-1`; R2: `auto`) |
+| `S3_ACCESS_KEY_ID` | `storage.s3.S3StorageBackend` | Access key |
+| `S3_SECRET_ACCESS_KEY` | `storage.s3.S3StorageBackend` | Secret key |
+| `S3_FORCE_PATH_STYLE` | `storage.s3.S3StorageBackend` | `true` for MinIO/R2 (path-style URLs) |
 
 ---
 
@@ -781,6 +919,12 @@ Environment variables actually read by the code:
 | `hipaa.baa` | `BAAService`, `BAATemplate`, `BAAgreement`, `BAAgreementSummary` |
 | `hipaa.dashboard` | `ComplianceService`, `ComplianceSummary`, `PHIStats` |
 | `hipaa.middleware` | FastAPI dependencies `get_phi_redactor`, `get_audit_logger`, `get_encryption_service` (process-wide singletons, wired into the routes in `routes/hipaa.py`) |
+| `storage.base` | `ObjectStorageBackend` Protocol (put/get/delete/exists/list) |
+| `storage.local` | `LocalStorageBackend` (filesystem, traversal-safe, 0600 perms) |
+| `storage.s3` | `S3StorageBackend` (aiobotocore; S3/R2/MinIO) |
+| `storage.factory` | `get_storage_backend()` — selects backend from `STORAGE_BACKEND` env |
+| `storage.encryption` | `FileEncryptor` — AES-256-GCM per-file encryption with `MNAS1` header |
+| `storage.retention` | `RetentionEngine`, `sweep_expired()`, background sweep task factory |
 
 ---
 
