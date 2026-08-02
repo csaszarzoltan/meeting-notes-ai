@@ -121,21 +121,15 @@ class TestSweepExpiredBehavioral:
     """sweep_expired deletes expired objects, soft-deletes rows, audits."""
 
     def test_sweep_deletes_expired_and_soft_deletes(self, tmp_path):
-        backend, rows = _seed_sweep_rows(tmp_path, expired_count=1, live_count=1)
+        backend, rows, engine = _seed_sweep_rows(tmp_path, expired_count=1, live_count=1)
 
         async def _run():
 
-            from meeting_notes_ai.db.engine import (
-                create_db_engine,
-                create_session_factory,
-                init_db,
-            )
+            from meeting_notes_ai.db.engine import create_session_factory
             from meeting_notes_ai.db.models import StoredFile
             from meeting_notes_ai.hipaa.audit_logger import AuditLogger
             from meeting_notes_ai.hipaa.config import HIPAAConfig
 
-            engine = create_db_engine("sqlite+aiosqlite://", echo=False)
-            await init_db(engine)
             factory = create_session_factory(engine)
 
             audit = AuditLogger(config=HIPAAConfig(audit_log_dir=str(tmp_path / "audit")))
@@ -169,21 +163,15 @@ class TestSweepExpiredBehavioral:
         asyncio.run(_run())
 
     def test_sweep_skips_soft_deleted_rows(self, tmp_path):
-        backend, rows = _seed_sweep_rows(tmp_path, expired_count=1, live_count=0)
+        backend, rows, engine = _seed_sweep_rows(tmp_path, expired_count=1, live_count=0)
 
         async def _run():
 
-            from meeting_notes_ai.db.engine import (
-                create_db_engine,
-                create_session_factory,
-                init_db,
-            )
+            from meeting_notes_ai.db.engine import create_session_factory
             from meeting_notes_ai.db.models import StoredFile
             from meeting_notes_ai.hipaa.audit_logger import AuditLogger
             from meeting_notes_ai.hipaa.config import HIPAAConfig
 
-            engine = create_db_engine("sqlite+aiosqlite://", echo=False)
-            await init_db(engine)
             factory = create_session_factory(engine)
             audit = AuditLogger(config=HIPAAConfig(audit_log_dir=str(tmp_path / "audit2")))
 
@@ -206,7 +194,12 @@ class TestSweepExpiredBehavioral:
 
 
 def _seed_sweep_rows(tmp_path, expired_count: int, live_count: int):
-    """Seed StoredFile rows (expired + live) with real backend bytes."""
+    """Seed StoredFile rows (expired + live) with real backend bytes.
+
+    Returns ``(backend, merged, engine)`` — the caller must use the same
+    engine's session factory for the sweep so the rows are visible (an
+    in-memory SQLite DB lives per-engine, not per-process).
+    """
     from meeting_notes_ai.storage.local import LocalStorageBackend
 
     from meeting_notes_ai.db.engine import (
@@ -301,12 +294,20 @@ def _seed_sweep_rows(tmp_path, expired_count: int, live_count: int):
                 keys[f"live_{i}_key"] = key
 
             await session.commit()
-        await engine.dispose()
-        return rows, keys
+        return rows, keys, engine
 
-    rows, keys = asyncio.run(_seed())
+    rows, keys, engine = asyncio.run(_seed())
     merged = {**rows, **keys}
-    return backend, merged
+    # The behavioral tests address the single seeded row via singular keys
+    # ("expired"/"live"/"expired_key"/"live_key"); expose aliases for the
+    # count-1 case the tests actually use.
+    if "expired_0" in merged:
+        merged["expired"] = merged["expired_0"]
+        merged["expired_key"] = merged["expired_0_key"]
+    if "live_0" in merged:
+        merged["live"] = merged["live_0"]
+        merged["live_key"] = merged["live_0_key"]
+    return backend, merged, engine
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

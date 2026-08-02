@@ -182,6 +182,86 @@ PYTHONPATH=src .venv/bin/python examples/hipaa_rotate_key.py
 
 ---
 
+## Secure File Storage (v0.7.0)
+
+Since v0.7.0, MeetingNotesAI stores uploaded audio durably instead of
+discarding it after transcription. Files live in a **vendor-agnostic object
+storage layer** (`meeting_notes_ai.storage`) with DB-persisted metadata
+(`storage_files` table), RBAC-protected download endpoints, a **HIPAA
+retention engine** with audit logging, and optional **AES-256-GCM
+encryption at rest** that works identically on every backend.
+
+> **Security note:** the legacy `POST /api/v1/meetings` and
+> `POST /api/v1/transcribe` endpoints remain unauthenticated (out of scope).
+> The storage router below is **fully authenticated** — every endpoint
+> requires a Bearer JWT and meeting access is enforced per RBAC.
+
+### Backends
+
+`STORAGE_BACKEND` selects the backend (no code change required to switch):
+
+| Backend | `STORAGE_BACKEND` | Notes |
+|---------|-------------------|-------|
+| Local filesystem | `local` (default) | Root at `STORAGE_LOCAL_DIR` (`data/storage`); files written `0600`, traversal-safe. Used by the quick test suite. |
+| AWS S3 | `s3` | `S3_*` env vars; pre-provision the bucket (auto-created on first put). |
+| Cloudflare R2 | `s3` + `S3_ENDPOINT_URL` | `https://<account>.r2.cloudflarestorage.com`, `S3_REGION=auto` |
+| MinIO (dev) | `s3` + `S3_ENDPOINT_URL` | `docker compose -f docker-compose.dev.yml up -d minio` |
+
+### REST endpoints (all authenticated)
+
+| Method | Path | RBAC | Purpose |
+|--------|------|------|---------|
+| POST | `/api/v1/meetings/{meeting_id}/audio` | owner / team member (write) | Upload audio (multipart `file`, MIME allowlist, 25 MB cap, streamed SHA-256). 201 + metadata; 409 on duplicate; 413 oversize; 415 bad MIME. |
+| GET | `/api/v1/meetings/{meeting_id}/audio` | owner / any team member | Download stored audio (Content-Disposition attachment). 404 when none. |
+| DELETE | `/api/v1/meetings/{meeting_id}/audio` | owner / team member (write) | Soft-delete the stored audio. 204. |
+| GET | `/api/v1/meetings/{meeting_id}/transcript` | owner / any team member | Transcript as `.txt` attachment (stored transcript file, else `Meeting.transcript`). |
+| PUT | `/api/v1/teams/{team_id}/retention` | team admin | Set retention: `{"retention_days": 365\|1095\|2555\|null}` (1y/3y/7y/inherit); recomputes `expires_at` for the team's files. |
+| GET | `/api/v1/teams/{team_id}/retention` | any team member | Read `{retention_days, effective_days, expires_at_example}`. |
+| POST | `/api/v1/admin/retention/sweep` | `ADMIN_API_TOKEN` | Run the retention sweep immediately; returns `{expired, deleted, failed}`. |
+
+Every operation writes a HIPAA audit entry (`storage.upload`,
+`storage.download`, `storage.delete`, `storage.expire`,
+`storage.decrypt_failed`, `retention.policy.update`) — query them via
+`GET /api/v1/audit-logs?action=storage.expire`.
+
+### Encryption at rest
+
+Set `STORAGE_ENCRYPTION=aes256gcm` to encrypt stored files
+client-side (per-file random 256-bit DEK wrapped by a KEK derived from
+`STORAGE_ENCRYPTION_KEY`, falling back to `HIPAA_MASTER_KEY`). Blobs carry a
+versioned `MNAS1` header; tampering or a wrong key raises
+`502 storage_decrypt_failed` (never raw ciphertext). The app **fails fast at
+startup** when the mode is set without a key. **HIPAA deployments must set
+this** — Cloudflare R2 has no customer-managed server-side keys, so
+client-side encryption is the only uniform at-rest answer.
+
+### Retention
+
+The default retention is 6 years (`DEFAULT_RETENTION_DAYS=2190`, HIPAA
+minimum). A background task in the app lifespan sweeps expired files every
+`RETENTION_SWEEP_INTERVAL_SECONDS` (default 86400); expired objects are
+deleted from the backend, rows soft-deleted, and `storage.expire` audit
+entries written. Trigger manually via the admin sweep endpoint.
+
+```bash
+# Upload audio to a meeting (requires a JWT)
+curl -X POST http://localhost:8000/api/v1/meetings/<meeting_id>/audio \
+  -H "Authorization: Bearer <token>" \
+  -F "file=@recording.wav"
+
+# Download it back
+curl -OJ http://localhost:8000/api/v1/meetings/<meeting_id>/audio \
+  -H "Authorization: Bearer <token>"
+
+# Set a 7-year retention policy for a team
+curl -X PUT http://localhost:8000/api/v1/teams/<team_id>/retention \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"retention_days": 2555}'
+```
+
+---
+
 ## Quick Start (Standard Mode)
 
 ```bash
@@ -614,6 +694,7 @@ Test coverage by release:
 - 163 v0.2.0 tests (DB models, JWT auth, batch processing, team CRUD, webhooks, PDF/ZIP export)
 - 70 v0.3.0 tests (share creation, listing, revocation, public access, expiry, access control)
 - 298 v0.5.0 HIPAA tests (PHI redaction, audit logging, encryption, BAA template, compliance dashboard, HIPAA config, HIPAA REST routes)
+- 111 v0.7.0 storage tests (local/S3 backends, factory, AES-256-GCM encryption, StoredFile model, storage REST API + RBAC, retention sweep, MinIO integration)
 
 > Note: the v0.4.0 rate-limit/API-key test files (`test_ratelimit.py`,
 > `test_api_keys.py`, `test_tier_config.py`, `test_middleware.py`,
@@ -631,7 +712,9 @@ Test coverage by release:
    - `JWT_SECRET` (required)
    - `OPENAI_API_KEY` (required — used by `/api/v1/meetings` and `/api/v1/transcribe`)
    - `HIPAA_MASTER_KEY` (required for `/api/v1/encryption/rotate-key` and encryption at rest)
-5. No manual migration needed — `init_db` runs on startup
+   - `STORAGE_ENCRYPTION=aes256gcm` + `STORAGE_ENCRYPTION_KEY` (recommended for HIPAA — encrypts stored audio/transcripts at rest)
+   - `STORAGE_BACKEND=s3` + `S3_*` vars when using S3/R2/MinIO (defaults to local filesystem)
+5. No manual migration needed — `init_db` runs on startup (Alembic migration `20260801_0002` adds `storage_files` + `teams.retention_days` for existing DBs)
 
 See `railway.toml` for service configuration.
 

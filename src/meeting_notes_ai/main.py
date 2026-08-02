@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -30,25 +32,50 @@ from meeting_notes_ai.routes import (
     public,
     readiness,
     sharing,
+    storage,
     teams,
     webhooks,
 )
-from meeting_notes_ai.security_config import validate_production_settings
+from meeting_notes_ai.security_config import (
+    validate_production_settings,
+    validate_storage_settings,
+)
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Validate security and provision the default database when needed."""
+    """Validate security, provision the default database, start the sweep task."""
     validate_production_settings(settings)
+    validate_storage_settings(settings)
     engine = None
     if not is_session_factory_configured():
         engine = create_db_engine(settings.database_url, echo=settings.database_echo)
         set_session_factory(create_session_factory(engine))
         await init_db(engine)
         app.state.database_engine = engine
+
+    sweep_task: asyncio.Task | None = None
+    if settings.retention_sweep_interval_seconds > 0:
+        from meeting_notes_ai.storage.retention import run_storage_sweep_forever
+
+        sweep_task = asyncio.create_task(
+            run_storage_sweep_forever(settings.retention_sweep_interval_seconds)
+        )
+        logger.info(
+            "retention sweep scheduled every %s seconds",
+            settings.retention_sweep_interval_seconds,
+        )
     try:
         yield
     finally:
+        if sweep_task is not None:
+            sweep_task.cancel()
+            try:
+                await sweep_task
+            except asyncio.CancelledError:
+                pass
         if engine is not None:
             await close_db(engine)
 
@@ -81,3 +108,4 @@ app.include_router(webhooks.router)
 app.include_router(sharing.router)
 app.include_router(public.router)
 app.include_router(hipaa.router)
+app.include_router(storage.router)

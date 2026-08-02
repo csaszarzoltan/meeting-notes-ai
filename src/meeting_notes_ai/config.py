@@ -52,6 +52,43 @@ class Settings:
         default_factory=lambda: float(os.getenv("MEETING_RATE_LIMIT_BURST_FACTOR", "1.0"))
     )
 
+    # ── Secure file storage (v0.7.0) ─────────────────────────────────────────
+    storage_backend: str = field(
+        default_factory=lambda: os.getenv("STORAGE_BACKEND", "local")
+    )
+    storage_local_dir: str = field(
+        default_factory=lambda: os.getenv("STORAGE_LOCAL_DIR", "data/storage")
+    )
+    s3_endpoint_url: str = field(default_factory=lambda: os.getenv("S3_ENDPOINT_URL", ""))
+    s3_bucket: str = field(
+        default_factory=lambda: os.getenv("S3_BUCKET", "meeting-notes-ai")
+    )
+    s3_region: str = field(default_factory=lambda: os.getenv("S3_REGION", "us-east-1"))
+    s3_access_key_id: str = field(
+        default_factory=lambda: os.getenv("S3_ACCESS_KEY_ID", "")
+    )
+    s3_secret_access_key: str = field(
+        default_factory=lambda: os.getenv("S3_SECRET_ACCESS_KEY", "")
+    )
+    s3_force_path_style: bool = field(
+        default_factory=lambda: os.getenv("S3_FORCE_PATH_STYLE", "true").lower()
+        in {"1", "true", "yes"}
+    )
+    storage_encryption: str = field(
+        default_factory=lambda: os.getenv("STORAGE_ENCRYPTION", "none")
+    )
+    storage_encryption_key: str = field(
+        default_factory=lambda: os.getenv("STORAGE_ENCRYPTION_KEY", "")
+    )
+    default_retention_days: int = field(
+        default_factory=lambda: int(os.getenv("DEFAULT_RETENTION_DAYS", "2190"))
+    )
+    retention_sweep_interval_seconds: int = field(
+        default_factory=lambda: int(
+            os.getenv("RETENTION_SWEEP_INTERVAL_SECONDS", "86400")
+        )
+    )
+
     # Shared patterns reference
     RAILWAY_HEALTHCHECK_PATH: str = "/healthz"
 

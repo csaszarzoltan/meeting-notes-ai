@@ -7,7 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.5.0] — 2026-07-31
+## [0.7.0] — 2026-08-01
+
+### Added
+
+#### Secure File Storage (`meeting_notes_ai.storage`)
+
+Durable audio/transcript storage with a vendor-agnostic object-storage
+layer, DB-persisted metadata, RBAC-protected download endpoints, a HIPAA
+retention engine with audit logging, and optional AES-256-GCM encryption
+at rest.
+
+- **Storage abstraction** — `ObjectStorageBackend` protocol (put/get/
+  delete/exists/list) with two backends: `LocalStorageBackend` (traversal-
+  safe, `0600` perms, dev/quick-tests) and `S3StorageBackend` (aiobotocore;
+  AWS S3, Cloudflare R2 and MinIO via `S3_ENDPOINT_URL` + path-style).
+  `get_storage_backend()` factory selects by `STORAGE_BACKEND` env.
+- **DB model** — `StoredFile` (`storage_files` table: meeting/user FKs,
+  kind, object_key, bucket, size, plaintext SHA-256, content type,
+  encryption mode, `expires_at`, soft-delete `deleted_at`) plus
+  `StorageFileKind` / `StorageEncryption` enums and `Team.retention_days`
+  (nullable). Alembic migration `20260801_0002` (non-destructive, tested
+  against a v0.6.2 DB).
+- **Storage REST API** (`routes/storage.py`, fully authenticated) —
+  POST/GET/DELETE audio per meeting, GET transcript as `.txt`; MIME
+  allowlist + 25 MB streaming cap with SHA-256; duplicate → 409,
+  oversize → 413, bad MIME → 415; meeting access via the sharing router's
+  `_verify_meeting_access` RBAC (viewers read-only).
+- **Encryption at rest** (`storage/encryption.py`) — `FileEncryptor`:
+  AES-256-GCM, per-file random DEK wrapped by a KEK derived from
+  `STORAGE_ENCRYPTION_KEY` (fallback `HIPAA_MASTER_KEY`); versioned
+  `MNAS1` blob header; tamper/wrong key → 502 `storage_decrypt_failed` +
+  `storage.decrypt_failed` audit; startup fail-fast without a key.
+- **HIPAA retention** (`storage/retention.py`) — `RetentionPolicy`
+  (1y/3y/7y/inherit, 6-year default), `sweep_expired()` deleting expired
+  objects + soft-deleting rows + `storage.expire` audit entries, asyncio
+  background sweep in the app lifespan
+  (`RETENTION_SWEEP_INTERVAL_SECONDS`), and a manual admin sweep endpoint
+  (ADMIN_API_TOKEN gate).
+- **Retention policy API** — PUT/GET per team (`retention_days` 365/1095/
+  2555/null), recomputes `expires_at` for the team's stored files, audits
+  `retention.policy.update`.
+- **Audit integration** — all storage operations reuse
+  `meeting_notes_ai.hipaa.audit_logger.AuditLogger`
+  (`storage.upload/download/delete/expire/decrypt_failed`), queryable via
+  the existing audit-logs endpoint.
+- **Dev infra** — `docker-compose.dev.yml` starts MinIO (ports 9000/9001);
+  `tests/test_storage_s3_integration.py` (marked `integration`) runs
+  against real MinIO, skipping with a clear message when unreachable.
+
+### Changed
+
+- `Settings` gains storage/retention env vars (`STORAGE_BACKEND`,
+  `STORAGE_LOCAL_DIR`, `S3_*`, `STORAGE_ENCRYPTION[_KEY]`,
+  `DEFAULT_RETENTION_DAYS`, `RETENTION_SWEEP_INTERVAL_SECONDS`); see
+  `.env.example`.
+
+---
 
 ### Added
 

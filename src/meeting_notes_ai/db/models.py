@@ -50,6 +50,20 @@ class WebhookEvent(str, PyEnum):
     BATCH_FAILED = "batch.failed"
 
 
+class StorageFileKind(str, PyEnum):
+    """Kind of a stored object (analysis brief §6.2)."""
+
+    AUDIO = "audio"
+    TRANSCRIPT = "transcript"
+
+
+class StorageEncryption(str, PyEnum):
+    """Encryption mode of a stored object (analysis brief §6.2)."""
+
+    NONE = "none"
+    AES256GCM = "aes256gcm"
+
+
 # ── Mixins ─────────────────────────────────────────────────────────────────────
 
 
@@ -117,6 +131,9 @@ class Team(Base, TimestampMixin):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=True)
     owner_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False)
+    retention_days: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True
+    )  # NULL → DEFAULT_RETENTION_DAYS (inherit)
 
     # Relationships
     owner: Mapped["User"] = relationship()
@@ -125,6 +142,9 @@ class Team(Base, TimestampMixin):
     )
     meetings: Mapped[list["Meeting"]] = relationship(back_populates="team")
     webhook_subscriptions: Mapped[list["WebhookSubscription"]] = relationship(
+        back_populates="team", cascade="all, delete-orphan"
+    )
+    stored_files: Mapped[list["StoredFile"]] = relationship(
         back_populates="team", cascade="all, delete-orphan"
     )
 
@@ -259,3 +279,51 @@ class WebhookSubscription(Base, TimestampMixin):
 
     # Relationships
     team: Mapped["Team"] = relationship(back_populates="webhook_subscriptions")
+
+
+# ── StoredFile (secure file storage, v0.7.0) ───────────────────────────────────
+
+
+class StoredFile(Base, TimestampMixin):
+    """A durable audio/transcript object stored on the storage backend.
+
+    Metadata lives in the DB (checksum, size, content type, retention);
+    the bytes live on the object backend under ``object_key``. Rows are
+    soft-deleted (``deleted_at``) so the HIPAA audit trail can always
+    point at what was stored, even after the object is gone.
+    """
+
+    __tablename__ = "storage_files"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    meeting_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("meetings.id"), nullable=False, index=True
+    )
+    team_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("teams.id"), nullable=True, index=True
+    )
+    uploaded_by: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id"), nullable=False
+    )
+    kind: Mapped[StorageFileKind] = mapped_column(
+        Enum(StorageFileKind), nullable=False
+    )
+    object_key: Mapped[str] = mapped_column(String(500), nullable=False)
+    bucket: Mapped[str] = mapped_column(String(200), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(200), nullable=False)
+    encryption: Mapped[StorageEncryption] = mapped_column(
+        Enum(StorageEncryption), default=StorageEncryption.NONE, nullable=False
+    )
+    expires_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+
+    # Relationships
+    meeting: Mapped["Meeting"] = relationship()
+    team: Mapped[Optional["Team"]] = relationship(back_populates="stored_files")
+    uploader: Mapped["User"] = relationship()
