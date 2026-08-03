@@ -10,6 +10,7 @@ pytestmark = pytest.mark.integration
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from meeting_notes_ai import __version__
 from meeting_notes_ai.main import app
 from meeting_notes_ai.routes.health import router as health_router
 from meeting_notes_ai.routes.meetings import router as meetings_router
@@ -46,7 +47,7 @@ class TestAppInterface:
         """App should be a FastAPI instance with expected metadata."""
         assert isinstance(app, FastAPI)
         assert app.title == "MeetingNotesAI"
-        assert app.version == "0.6.2"
+        assert app.version == __version__
 
     def test_health_router_included(self):
         """Health check router should be included in the app."""
@@ -93,7 +94,7 @@ class TestAppBehavioral:
 
         result = asyncio.run(health_check())
         assert result.status == "healthy"
-        assert result.version == "0.6.2"
+        assert result.version == __version__
         assert "app" in result.services
 
     def test_client_get_healthz_returns_200(self):
@@ -103,7 +104,7 @@ class TestAppBehavioral:
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "healthy"
-        assert data["version"] == "0.6.2"
+        assert data["version"] == __version__
 
 
 # ── Rate Limit Response Headers (P1) ──────────────────────────────────────────

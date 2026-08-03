@@ -66,6 +66,14 @@ React + TypeScript + Vite (`frontend/`) and served by
 - **Live view Authorization header** — repaired the mangled `Authorization`
   header in the live view hook so the WebSocket connect carries a correct
   `Bearer` JWT.
+- **Real-mic streaming crash** — chunk serialization no longer UTF-8-decodes
+  binary WebM/Opus audio (`_chunk_to_json` now base64-encodes `data` first),
+  so real microphone streams stop crashing with `UnicodeDecodeError`; the
+  live view also surfaces an in-flight WebSocket close as a visible error
+  instead of hanging on "Live — recording".
+- **Version-drift assertions** — `tests/test_app.py` now asserts against the
+  package `__version__` constant instead of a hardcoded `0.6.2`, eliminating
+  the pre-existing 3-failure baseline.
 
 ### Tests
 
@@ -74,8 +82,8 @@ React + TypeScript + Vite (`frontend/`) and served by
   covering the WebSocket session lifecycle, team scoping, finalize
   persistence, and the REST fallback endpoint.
 - **UI tests** — `tests/test_live_ui.py` (13 tests) for the `/app/live` view.
-- **Full suite at release** — 1019 passed / 3 failed (pre-existing
-  `test_app.py` version-drift assertions, tracked separately) / 18 xfailed.
+- **Full suite at release** — 1026 passed / 0 failed / 18 xfailed (version-drift
+  assertions fixed; flake-watched upload tests deterministic).
 
 ### Docs
 
