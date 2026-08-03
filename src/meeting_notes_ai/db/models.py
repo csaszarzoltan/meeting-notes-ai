@@ -327,3 +327,38 @@ class StoredFile(Base, TimestampMixin):
     meeting: Mapped["Meeting"] = relationship()
     team: Mapped[Optional["Team"]] = relationship(back_populates="stored_files")
     uploader: Mapped["User"] = relationship()
+
+
+# ── LiveSessionRecord (streaming STT, v0.7.0) ─────────────────────────────────
+
+
+class LiveSessionRecord(Base, TimestampMixin):
+    """Durable state of a live transcription session.
+
+    The Pydantic ``LiveSession`` (``meeting_notes_ai.live_session``) is the
+    wire/domain shape; this row is its persistent storage so a session
+    survives client disconnects and can be resumed. ``chunks`` and
+    ``partials`` are stored as JSON (see the live transcription service),
+    carrying the HIPAA retention fields (``retention_days``, ``hipaa``,
+    ``phi_classification``) through the v0.7.0 storage integration.
+    """
+
+    __tablename__ = "live_sessions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    meeting_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("meetings.id"), nullable=False, index=True
+    )
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id"), nullable=False, index=True
+    )
+    team_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("teams.id"), nullable=True
+    )
+    room_id: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="live", nullable=False)
+    chunks_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    partials_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    retention_days: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    hipaa: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    phi_classification: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
