@@ -11,6 +11,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Live Transcription Backend (`/api/v1/meetings/live`)
+
+Real-time streaming transcription: WebSocket sessions, streaming STT, and
+live action-item extraction at finalize.
+
+- **WebSocket live session** — `WS /api/v1/meetings/live` (JWT-authenticated,
+  meeting/team-workspace scoped) accepts streaming audio chunks and emits
+  partial transcripts over the socket with monotonic sequence + timestamps.
+- **Session persistence** — `LiveSession` state persisted to the
+  `live_sessions` table (Alembic migration `20260803_0003_live_sessions`),
+  survives disconnect and is resumable; finalize writes the full transcript
+  through the existing transcription pipeline and creates the meeting record
+  with summary, decisions, and action items.
+- **Streaming STT** — raw 16 kHz PCM is framed as WAV before Whisper
+  (Whisper rejects headerless PCM); WebM/Opus passed through.
+- **REST fallback** — `POST /api/v1/meetings/live/upload` accepts a full
+  audio file and returns the same transcript shape for non-streaming clients
+  (401/415/413/429 mapped).
+- **Rate limiting + retention** — per-user `TokenBucketRateLimiter` on
+  ingest/finalize/upload; team HIPAA retention policy carried through to
+  live sessions.
+- **Session start** — `POST /api/v1/meetings/live/start` creates a draft
+  meeting and returns the room/meeting scoped session.
+
 #### Live Transcription UI (`/app/live`)
 
 Component-based live-transcription view for the B2B dashboard, built with
@@ -36,6 +60,28 @@ React + TypeScript + Vite (`frontend/`) and served by
   `examples/live_transcription_client.py` (runnable WS client),
   `examples/live_demo_server.py` (dev server with a fake AI seam, no
   `OPENAI_API_KEY` needed).
+
+### Fixed
+
+- **Live view Authorization header** — repaired the mangled `Authorization`
+  header in the live view hook so the WebSocket connect carries a correct
+  `Bearer` JWT.
+
+### Tests
+
+- **TDD RED contract** — 71 pre-written tests
+  (`tests/test_live_session.py` 46 + `tests/test_live_transcription.py` 25)
+  covering the WebSocket session lifecycle, team scoping, finalize
+  persistence, and the REST fallback endpoint.
+- **UI tests** — `tests/test_live_ui.py` (13 tests) for the `/app/live` view.
+- **Full suite at release** — 1019 passed / 3 failed (pre-existing
+  `test_app.py` version-drift assertions, tracked separately) / 18 xfailed.
+
+### Docs
+
+- **README + docs/LIVE_TRANSCRIPTION.md** — live transcription API reference:
+  WS contract, REST fallback `POST /api/v1/meetings/live/upload`, rate
+  limiting, and the demo-server quick start.
 
 ## [0.7.0] — 2026-08-01
 
