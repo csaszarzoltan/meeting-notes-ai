@@ -100,17 +100,25 @@ class SecurityHeadersMiddleware:
         async def send_with_security_headers(message):
             if message.get("type") == "http.response.start":
                 headers = list(message.get("headers", []))
+                header_names = {k.decode("latin1").lower() for k, _ in headers}
                 headers.extend(
                     [
                         (b"x-content-type-options", b"nosniff"),
                         (b"x-frame-options", b"DENY"),
                         (b"referrer-policy", b"no-referrer"),
+                    ]
+                )
+                # The global default blocks camera/mic/geolocation everywhere.
+                # A route may relax this for its own page (e.g. the live
+                # transcription view needs the microphone) by setting a
+                # Permissions-Policy header on its response — never clobber it.
+                if "permissions-policy" not in header_names:
+                    headers.append(
                         (
                             b"permissions-policy",
                             b"camera=(), microphone=(), geolocation=()",
-                        ),
-                    ]
-                )
+                        )
+                    )
                 if scope.get("path", "").startswith("/api/"):
                     headers.append((b"cache-control", b"no-store"))
                     headers.append((b"pragma", b"no-cache"))

@@ -120,3 +120,16 @@ class LiveTranscriptResponse(BaseModel):
     chunk_count: int = 0
     partial_count: int = 0
     duration_seconds: float = 0.0
+
+
+class LiveStartResponse(BaseModel):
+    """Response for creating a draft meeting the live UI connects to.
+
+    The WebSocket endpoint requires the ``meeting_id`` row to already exist
+    (owner/team scoping is checked before the session is created), so the
+    live view calls ``POST /api/v1/meetings/live/start`` first and uses the
+    returned ``meeting_id`` as the WS ``meeting_id`` query parameter.
+    """
+
+    meeting_id: str
+    status: str = "live_ready"

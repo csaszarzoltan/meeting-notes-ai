@@ -24,6 +24,8 @@ layer maps to HTTP 429 (or a WS error frame).
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import struct
 from datetime import datetime, timezone
@@ -45,6 +47,35 @@ from meeting_notes_ai.services.extraction import ExtractionService
 from meeting_notes_ai.services.transcription import TranscriptionService
 
 _WEBM_MAGIC = b"\x1a\x45\xdf\xa3"
+
+
+def _chunk_to_json(chunk: LiveChunk) -> dict:
+    """Serialize a chunk for DB storage with base64-encoded audio bytes.
+
+    ``LiveChunk.data`` is arbitrary binary (WebM/Opus or PCM), which is not
+    valid UTF-8 — ``model_dump(mode="json")`` would raise UnicodeDecodeError.
+    Base64 keeps the column JSON-safe and round-trippable.
+    """
+    dumped = chunk.model_dump(mode="json")
+    dumped["data"] = base64.b64encode(chunk.data).decode("ascii")
+    return dumped
+
+
+def _chunk_from_json(raw: dict) -> LiveChunk:
+    """Rehydrate a chunk from DB JSON, tolerating both base64 and legacy rows.
+
+    Rows written before the base64 fix stored ``data`` as a UTF-8-decoded
+    string (valid for ASCII-ish test bytes only). We prefer base64 and fall
+    back to utf-8 encoding for those legacy rows.
+    """
+    data = raw.get("data")
+    if isinstance(data, str):
+        try:
+            decoded = base64.b64decode(data, validate=True)
+        except (binascii.Error, ValueError):
+            decoded = data.encode("utf-8")
+        raw = {**raw, "data": decoded}
+    return LiveChunk.model_validate(raw)
 
 
 class LiveRateLimitExceeded(Exception):
@@ -320,7 +351,7 @@ class LiveTranscriptionService:
         row.team_id = session.team_id
         row.room_id = session.room_id
         row.status = session.status.value
-        row.chunks_json = json.dumps([c.model_dump(mode="json") for c in session.chunks])
+        row.chunks_json = json.dumps([_chunk_to_json(c) for c in session.chunks])
         row.partials_json = json.dumps(
             [p.model_dump(mode="json") for p in session.partials]
         )
@@ -329,7 +360,7 @@ class LiveTranscriptionService:
         row.phi_classification = session.phi_classification
 
     def _row_to_session(self, row: LiveSessionRecord) -> LiveSession:
-        chunks = [LiveChunk.model_validate(c) for c in json.loads(row.chunks_json or "[]")]
+        chunks = [_chunk_from_json(c) for c in json.loads(row.chunks_json or "[]")]
         partials = [
             LivePartial.model_validate(p) for p in json.loads(row.partials_json or "[]")
         ]

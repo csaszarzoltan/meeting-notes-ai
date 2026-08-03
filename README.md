@@ -9,6 +9,7 @@ Micro-SaaS for meeting transcription and structured notes.
 ## Features
 
 - **Transcription**: Upload audio files for transcription via OpenAI Whisper API
+- **Live Transcription (v0.8.0+)**: Real-time streaming transcription over WebSocket — connect a microphone, watch partial transcripts appear as you speak, then finalize to extract action items/decisions. Component-based React view at `/app/live` (see [Live Transcription](docs/LIVE_TRANSCRIPTION.md) for the WS contract)
 - **Extraction**: Automatically extract action items, decisions, and key points using LLM
 - **Mode-specific processing**:
   - **General**: Standard meeting notes
@@ -361,6 +362,27 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
 All team, batch, and webhook endpoints require authentication. Unauthenticated requests return **401 Unauthorized**.
 
 ## API
+
+### Live Transcription (WebSocket)
+
+Real-time streaming transcription. Full contract in
+[docs/LIVE_TRANSCRIPTION.md](docs/LIVE_TRANSCRIPTION.md); runnable clients in
+`examples/live_transcription_client.py` (WS) and `examples/live_demo_server.py`
+(dev server with a fake AI seam so the UI works without an API key).
+
+```bash
+# 1. Login
+curl -s -X POST http://localhost:8000/api/v1/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"you@example.com","password":"s3cret"}'   # -> {access_token}
+
+# 2. Create a draft meeting (Bearer token)
+curl -s -X POST http://localhost:8000/api/v1/meetings/live/start \
+  -H "Authorization: Bearer $TOKEN"                      # -> {meeting_id}
+
+# 3. Open the WS, stream WebM/Opus binary chunks, receive partials,
+#    send {"type":"finalize"} -> finalized frame with action items
+```
 
 ### POST /api/v1/meetings
 

@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Added
+
+#### Live Transcription UI (`/app/live`)
+
+Component-based live-transcription view for the B2B dashboard, built with
+React + TypeScript + Vite (`frontend/`) and served by
+`routes/product_app.py`.
+
+- **Connect button + microphone wiring** — `getUserMedia` → `MediaRecorder`
+  (`audio/webm;codecs=opus`) → binary WebM chunks over the live WebSocket.
+- **Streaming transcript panel** — partial updates rendered in sequence
+  order with `aria-live="polite"`, auto-scrolling as new partials arrive.
+- **Finalize action** — sends the `{"type":"finalize"}` control frame and
+  renders the finalized transcript, summary, decisions, and a visible
+  action-item list.
+- **Auth + session flow** — login via `/api/v1/auth/login` (JWT kept in
+  `sessionStorage`), draft meeting via the new
+  `POST /api/v1/meetings/live/start` endpoint, then WS connect.
+- **Security** — the live page carries its own CSP
+  (`connect-src 'self' ws: wss:`) and `Permissions-Policy:
+  microphone=(self)`; the security middleware no longer clobbers a
+  route-provided Permissions-Policy, so every other page keeps the strict
+  camera/mic/geolocation lockdown.
+- **Docs + examples** — `docs/LIVE_TRANSCRIPTION.md` (WS contract),
+  `examples/live_transcription_client.py` (runnable WS client),
+  `examples/live_demo_server.py` (dev server with a fake AI seam, no
+  `OPENAI_API_KEY` needed).
+
 ## [0.7.0] — 2026-08-01
 
 ### Added

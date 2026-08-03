@@ -28,7 +28,12 @@ from meeting_notes_ai.auth import decode_access_token, get_current_user
 from meeting_notes_ai.config import settings
 from meeting_notes_ai.db.models import Meeting, Team, TeamMember
 from meeting_notes_ai.db.session import get_db_session
-from meeting_notes_ai.live_session import LiveChunk, LiveChunkFormat, LiveTranscriptResponse
+from meeting_notes_ai.live_session import (
+    LiveChunk,
+    LiveChunkFormat,
+    LiveStartResponse,
+    LiveTranscriptResponse,
+)
 from meeting_notes_ai.ratelimit import TokenBucketRateLimiter
 from meeting_notes_ai.services.extraction import ExtractionService
 from meeting_notes_ai.services.live_transcription import (
@@ -179,6 +184,32 @@ async def websocket_live(
             except RuntimeError:
                 # Connection already torn down by the peer; nothing to do.
                 pass
+
+
+@router.post("/start", response_model=LiveStartResponse, status_code=201)
+async def start_live_session(
+    user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+) -> LiveStartResponse:
+    """Create a draft meeting the live UI connects to.
+
+    The WebSocket handler scopes sessions to an existing ``Meeting`` row
+    (owner check / team membership), so the browser view needs a meeting to
+    exist before it can open the socket. This endpoint provisions one owned
+    by the authenticated user; the live session then attaches to it and
+    finalize persists the transcript + summary onto the same row.
+    """
+    meeting = Meeting(
+        user_id=user["user_id"],
+        title="Live transcription session",
+        filename="live_session.webm",
+        mode="general",
+        transcript=None,
+    )
+    db.add(meeting)
+    await db.commit()
+    await db.refresh(meeting)
+    return LiveStartResponse(meeting_id=meeting.id)
 
 
 @router.post("/upload", response_model=LiveTranscriptResponse, status_code=200)

@@ -1,8 +1,8 @@
-# HIPAA Examples
+# Examples
 
-Runnable scripts demonstrating the `meeting_notes_ai.hipaa` library API and
-the wired REST surface (shipped in v0.5.0). Each script is verified to run
-with the repository virtualenv.
+Runnable scripts demonstrating the `meeting_notes_ai` APIs — the HIPAA
+library surface and the live-transcription WebSocket contract. Each script
+is verified to run with the repository virtualenv.
 
 ## Prerequisites
 
@@ -42,7 +42,25 @@ HIPAA_MASTER_KEY=dev-master-key PYTHONPATH=src .venv/bin/python examples/hipaa_c
 # (TestClient; faked transcriber, temp audit dir, in-memory DB — no server,
 # no OPENAI_API_KEY, no database needed)
 HIPAA_MASTER_KEY=dev-master-key PYTHONPATH=src .venv/bin/python examples/hipaa_rest_endpoints.py
+
+# Live transcription WS client — full contract: login -> draft meeting ->
+# WebM chunks -> partials -> finalize -> action items (needs a running server)
+PYTHONPATH=src .venv/bin/python examples/live_transcription_client.py \
+    --email you@example.com --password s3cret --chunks 4
+
+# Live transcription demo server — dev-only; swaps the AI seam for
+# deterministic fakes so the /app/live UI runs without OPENAI_API_KEY
+PYTHONPATH=src .venv/bin/python examples/live_demo_server.py
 ```
+
+## Live transcription examples
+
+`live_transcription_client.py` and `live_demo_server.py` implement the
+WebSocket contract documented in `docs/LIVE_TRANSCRIPTION.md`. The demo
+server exposes the real app at http://127.0.0.1:8000 with the external
+STT/LLM calls faked, so the component-based UI (`GET /app/live`) can be
+exercised end-to-end without an OpenAI key (login: `demo@example.com` /
+`demo1234`).
 
 ## Feature → script mapping
 
@@ -54,3 +72,5 @@ HIPAA_MASTER_KEY=dev-master-key PYTHONPATH=src .venv/bin/python examples/hipaa_r
 | BAA template generation & storage | `hipaa_baa_generate.py` |
 | Compliance dashboard aggregation | `hipaa_compliance_dashboard.py` |
 | REST endpoints (transcribe, audit-logs*, rotate-key, baa, dashboard) | `hipaa_rest_endpoints.py` |
+| Live transcription WS client (full contract flow) | `live_transcription_client.py` |
+| Live transcription demo server (fake AI seam, no API key) | `live_demo_server.py` |

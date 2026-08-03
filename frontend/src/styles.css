@@ -1,0 +1,234 @@
+/* Live transcription view — design tokens mirror the existing dashboard
+   (routes/product_app.py): same brand, cards, light/dark scheme. */
+:root {
+  color-scheme: light dark;
+  --bg: #f5f7fb;
+  --card: #fff;
+  --ink: #172033;
+  --muted: #536079;
+  --brand: #3157d5;
+  --danger: #b42318;
+  --ok: #067647;
+  --border: #c9d2e3;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111827;
+    --card: #1f2937;
+    --ink: #f9fafb;
+    --muted: #cbd5e1;
+    --brand: #8da2fb;
+    --border: #475569;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 16px/1.5 system-ui, sans-serif;
+}
+
+.wrap {
+  max-width: 960px;
+  margin: auto;
+  padding: 1rem;
+}
+
+header {
+  padding: 1rem 0;
+}
+
+header h1 {
+  margin: 0 0 0.25rem;
+}
+
+nav {
+  display: flex;
+  gap: 1rem;
+  margin-top: 0.75rem;
+}
+
+nav a {
+  color: var(--muted);
+  text-decoration: none;
+  padding: 0.35rem 0.6rem;
+  border-radius: 8px;
+  border: 1px solid transparent;
+}
+
+nav a:hover {
+  color: var(--ink);
+}
+
+nav a.active {
+  color: var(--brand);
+  border-color: var(--border);
+  background: var(--bg);
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 1.25rem;
+  margin-bottom: 1rem;
+  box-shadow: 0 3px 12px #0001;
+}
+
+.card h2 {
+  margin: 0 0 0.25rem;
+}
+
+.live-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+.hint,
+.muted {
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.error {
+  color: var(--danger);
+  border-left: 5px solid var(--danger);
+  padding: 0.5rem 0.75rem;
+  background: var(--bg);
+  border-radius: 0 8px 8px 0;
+}
+
+.grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+label {
+  display: block;
+  font-weight: 650;
+  margin-bottom: 0.35rem;
+}
+
+input,
+button {
+  font: inherit;
+}
+
+input {
+  width: 100%;
+  padding: 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--ink);
+}
+
+button {
+  border: 0;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  background: var(--brand);
+  color: white;
+  font-weight: 700;
+  cursor: pointer;
+  margin-right: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+button[disabled] {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+button.ghost {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border);
+}
+
+.auth-form {
+  margin-top: 1rem;
+}
+
+.auth-form button {
+  margin-top: 0.75rem;
+}
+
+.session-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.controls {
+  margin-top: 1rem;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  background: var(--bg);
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.badge-live {
+  background: #fee4e2;
+  color: var(--danger);
+}
+
+.badge-ok {
+  background: #e6f4ec;
+  color: var(--ok);
+}
+
+.transcript {
+  margin-top: 1rem;
+  min-height: 12rem;
+  max-height: 22rem;
+  overflow-y: auto;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.finalized {
+  margin-top: 1rem;
+  border-top: 1px solid var(--border);
+  padding-top: 1rem;
+}
+
+.finalized h3 {
+  margin: 0.75rem 0 0.25rem;
+}
+
+.actions {
+  margin: 0.25rem 0 0.75rem;
+  padding-left: 1.25rem;
+}
+
+.actions li {
+  margin-bottom: 0.25rem;
+}
+
+code {
+  background: var(--bg);
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  font-size: 0.85em;
+}
