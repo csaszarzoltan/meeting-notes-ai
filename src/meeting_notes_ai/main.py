@@ -27,6 +27,7 @@ from meeting_notes_ai.routes import (
     batches,
     health,
     hipaa,
+    live_transcription,
     meetings,
     product_app,
     public,
@@ -109,3 +110,4 @@ app.include_router(sharing.router)
 app.include_router(public.router)
 app.include_router(hipaa.router)
 app.include_router(storage.router)
+app.include_router(live_transcription.router)
