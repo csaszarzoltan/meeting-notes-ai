@@ -37,6 +37,65 @@ JWT returned by `POST /api/v1/auth/login` / `/signup`.
   resumed with the same session id, and finalize persists the transcript +
   summary onto the meeting row.
 
+### POST /api/v1/meetings/live/start
+
+Creates a draft meeting the WebSocket attaches to (the WS endpoint requires
+the `meeting_id` row to already exist). Bearer JWT required.
+
+**Response** (201):
+
+```json
+{
+  "meeting_id": "uuid",
+  "status": "live_ready"
+}
+```
+
+### POST /api/v1/meetings/live/upload
+
+REST fallback for clients that cannot hold a WebSocket open: transcribe a
+full audio file in one request and get the **same result shape** as a
+finalized WS session (`LiveTranscriptResponse`). Bearer JWT required.
+
+**Request:** multipart form with `file` (audio). Supported MIME types:
+`audio/wav`, `audio/mpeg`, `audio/mp4`, `audio/webm`; max size 25 MB
+(`MAX_AUDIO_SIZE_MB`).
+
+**Response** (200): identical to the `finalized` frame, except `session_id`
+is `null` and `chunk_count` / `partial_count` are `0`:
+
+```json
+{
+  "session_id": null,
+  "meeting_id": "uuid",
+  "transcript": "...",
+  "summary": "...",
+  "action_items": [{"assignee": "Mike", "description": "Ship live transcription", "deadline": null}],
+  "decisions": [],
+  "key_points": [],
+  "chunk_count": 0,
+  "partial_count": 0,
+  "duration_seconds": 12.5
+}
+```
+
+**Errors:** `400` empty file, `401` missing/invalid token, `415` unsupported
+MIME type, `413` file too large, `429` rate limit exceeded.
+
+```bash
+curl -X POST http://localhost:8000/api/v1/meetings/live/upload \
+  -H "Authorization: Bearer ***" \
+  -F "file=@recording.webm"
+```
+
+### Rate limiting
+
+Live transcription is rate limited **per user** with a token bucket
+(`TokenBucketRateLimiter`, key `live:<user_id>`), shared across chunk
+ingestion, finalize, and the REST upload fallback. An exhausted bucket sends
+the WS error frame `{"type": "error", "code": "rate_limited"}` (socket
+closed) or maps to HTTP `429` on the upload endpoint.
+
 ## 2. Client → server frames
 
 | Direction | Frame type | Payload | Meaning |
@@ -72,7 +131,7 @@ Sent once, after the client sends `{"type": "finalize"}`:
   "meeting_id": "…",
   "transcript": "…full transcript…",
   "summary": "…extracted summary…",
-  "action_items": [{"assignee": "Mike", "description": "Ship live transcription"}],
+  "action_items": [{"assignee": "Mike", "description": "Ship live transcription", "deadline": null}],
   "decisions": ["Deploy on Friday"],
   "key_points": ["Live transcription works"],
   "chunk_count": 42,

@@ -2,7 +2,7 @@
 
 Micro-SaaS for meeting transcription and structured notes.
 
-![Version](https://img.shields.io/badge/version-0.7.0-blue)
+![Version](https://img.shields.io/badge/version-0.8.0-blue)
 ![Python](https://img.shields.io/badge/python-3.11+-green)
 ![HIPAA](https://img.shields.io/badge/HIPAA-ready-8A2BE2)
 
@@ -365,7 +365,7 @@ All team, batch, and webhook endpoints require authentication. Unauthenticated r
 
 ### Live Transcription (WebSocket)
 
-Real-time streaming transcription. Full contract in
+Real-time streaming transcription (v0.8.0+). Full contract in
 [docs/LIVE_TRANSCRIPTION.md](docs/LIVE_TRANSCRIPTION.md); runnable clients in
 `examples/live_transcription_client.py` (WS) and `examples/live_demo_server.py`
 (dev server with a fake AI seam so the UI works without an API key).
@@ -378,10 +378,83 @@ curl -s -X POST http://localhost:8000/api/v1/auth/login \
 
 # 2. Create a draft meeting (Bearer token)
 curl -s -X POST http://localhost:8000/api/v1/meetings/live/start \
-  -H "Authorization: Bearer $TOKEN"                      # -> {meeting_id}
+  -H "Authorization: Bearer ***"  # -> {"meeting_id": "...", "status": "live_ready"}
 
 # 3. Open the WS, stream WebM/Opus binary chunks, receive partials,
 #    send {"type":"finalize"} -> finalized frame with action items
+```
+
+**Try it without an API key:** run the demo server
+(`PYTHONPATH=src .venv/bin/python examples/live_demo_server.py`), open
+http://127.0.0.1:8000/app/live, and log in with `demo@example.com` /
+`demo1234`. The demo server serves the real app with only the external
+STT/LLM calls faked.
+
+#### WS /api/v1/meetings/live
+
+Streaming endpoint. Query params: `token` (JWT — required; browsers cannot
+set headers on WebSocket handshakes), `meeting_id` (required — must exist and
+be owned by the caller or its team), `team_id` / `room_id` (optional scoping).
+
+- **client → server, binary**: audio chunks — WebM/Opus (detected by magic
+  bytes `1A 45 DF A3`) or 16 kHz PCM (framed as WAV server-side).
+- **client → server, text**: `{"type": "finalize"}`.
+- **server → client, text**: `partial` frames (`sequence`, `text`,
+  `timestamp` — monotonically increasing sequence, replace previous partial),
+  then one `finalized` frame (`session_id`, `meeting_id`, `transcript`,
+  `summary`, `action_items`, `decisions`, `key_points`, `chunk_count`,
+  `partial_count`, `duration_seconds`), or an `error` frame
+  (`{"type":"error","code":"rate_limited"}`).
+- **Close codes**: `4401` unauthorized, `4403` forbidden (not the meeting
+  owner / team member), `4404` meeting not found. Sessions are persisted to
+  the `live_sessions` table, so a dropped socket survives.
+
+#### POST /api/v1/meetings/live/start
+
+Create a draft meeting the WebSocket attaches to. Requires authentication.
+
+**Response** (201):
+```json
+{
+  "meeting_id": "uuid",
+  "status": "live_ready"
+}
+```
+
+#### POST /api/v1/meetings/live/upload
+
+REST fallback: transcribe a full audio file and return the same result shape
+as a finalized WebSocket session (no streaming, no session). Requires
+authentication.
+
+**Request:** multipart form with `file` (audio). Supported MIME types:
+`audio/wav`, `audio/mpeg`, `audio/mp4`, `audio/webm`; max size 25 MB
+(`MAX_AUDIO_SIZE_MB`).
+
+**Response** (200):
+```json
+{
+  "session_id": null,
+  "meeting_id": "uuid",
+  "transcript": "...",
+  "summary": "...",
+  "action_items": [{"assignee": "Mike", "description": "Ship live transcription", "deadline": null}],
+  "decisions": [],
+  "key_points": [],
+  "chunk_count": 0,
+  "partial_count": 0,
+  "duration_seconds": 12.5
+}
+```
+
+**Errors:** `400` empty file, `401` missing/invalid token, `415` unsupported
+MIME type, `413` file too large, `429` rate limit exceeded (per-user token
+bucket, shared with the WebSocket path).
+
+```bash
+curl -X POST http://localhost:8000/api/v1/meetings/live/upload \
+  -H "Authorization: Bearer ***" \
+  -F "file=@recording.webm"
 ```
 
 ### POST /api/v1/meetings
@@ -717,11 +790,13 @@ Test coverage by release:
 - 70 v0.3.0 tests (share creation, listing, revocation, public access, expiry, access control)
 - 298 v0.5.0 HIPAA tests (PHI redaction, audit logging, encryption, BAA template, compliance dashboard, HIPAA config, HIPAA REST routes)
 - 111 v0.7.0 storage tests (local/S3 backends, factory, AES-256-GCM encryption, StoredFile model, storage REST API + RBAC, retention sweep, MinIO integration)
+- 84 v0.8.0 live-transcription tests (live session lifecycle 46, live transcription service 25, live UI 13)
 
-> Note: the v0.4.0 rate-limit/API-key test files (`test_ratelimit.py`,
-> `test_api_keys.py`, `test_tier_config.py`, `test_middleware.py`,
-> `test_app.py`, `test_auth.py`) still fail because their source never landed
-> in this repository — they are pre-existing failures, unrelated to HIPAA.
+> Note: the v0.4.0-era test files (`test_ratelimit.py`, `test_api_keys.py`,
+> `test_tier_config.py`, `test_middleware.py`, `test_auth.py`) are green.
+> The only remaining suite failures are three pre-existing version-drift
+> assertions in `test_app.py` (it asserts `0.6.2` while the app reports
+> `0.7.0` / `0.8.0`) — tracked for the tech-lead, unrelated to feature work.
 
 ## Deployment
 

@@ -223,7 +223,7 @@ serves the Chart.js dashboard page unauthenticated.
 
 - **The canonical HIPAA paths are `/api/v1/transcribe`, `/api/v1/audit-logs*`,
   `/api/v1/encryption/rotate-key`, and `/api/v1/compliance/*`.** The
-  analysis-brief `/api/v1/hipaa/*` paths from the v0.4.0 changelog entry
+  analysis-brief `hipaa/*` REST paths from the v0.4.0 changelog entry
   (scan/redact/audit-log/encryption/baa/compliance) were never implemented
   and are not part of v0.5.0.
 - `POST /api/v1/meetings` does **not** redact PHI automatically — use
@@ -266,9 +266,9 @@ serves the Chart.js dashboard page unauthenticated.
 - Added HIPAA scaffolding: `hipaa/baa.py`, `hipaa/dashboard.py`, BAA +
   dashboard templates, and pre-written HIPAA tests
 
-> **Note:** this entry originally described HIPAA REST endpoints
-> (`/api/v1/hipaa/*`) and features that were planned but never shipped at
-> this version. The implemented HIPAA compliance library ships in v0.5.0 —
+> **Note:** this entry originally described analysis-brief `hipaa/*` REST
+> paths and features that were planned but never shipped at this version. The
+> implemented HIPAA compliance library ships in v0.5.0 —
 > see the [0.5.0] entry above.
 
 ## [0.3.0] — 2026-07-15
@@ -279,12 +279,11 @@ serves the Chart.js dashboard page unauthenticated.
 - **Batch Processing** — Process multiple audio files in a single batch job
 - **Team Management** — Multi-user team workspaces with admin/member/viewer roles
 - **Webhook Subscriptions** — Receive batch completion notifications via webhooks
-- **Legal Mode** — Case metadata, testimony tracking, objection logging
-- `/api/v1/sharing/*` endpoints for link management
+- **Legal Mode** — Case metadata, testimony tracking, objection logging (via `mode=legal` on meeting creation)
+- `/api/v1/meetings/{meeting_id}/share` and related share endpoints for link management
 - `/api/v1/teams/*` endpoints for team CRUD and membership
 - `/api/v1/batches/*` endpoints for batch processing
 - `/api/v1/webhooks/*` endpoints for subscription management
-- `/api/v1/legal/*` endpoints for legal mode
 
 ### Changed
 
@@ -306,7 +305,7 @@ serves the Chart.js dashboard page unauthenticated.
 - **LLM Extraction** — Structured data extraction via gpt-4o
 - `/api/v1/auth/*` endpoints for authentication
 - `/api/v1/meetings/*` endpoints for meeting CRUD
-- `/api/v1/export/*` endpoints for export operations
+- `GET /api/v1/batches/{batch_id}/export` — batch results export (JSON, Markdown, PDF, ZIP)
 
 ### Changed
 
