@@ -56,8 +56,11 @@ def _chunk_to_json(chunk: LiveChunk) -> dict:
     valid UTF-8 — ``model_dump(mode="json")`` would raise UnicodeDecodeError.
     Base64 keeps the column JSON-safe and round-trippable.
     """
-    dumped = chunk.model_dump(mode="json")
+    dumped = chunk.model_dump(mode="python")  # bytes stay bytes — no utf-8 decode
     dumped["data"] = base64.b64encode(chunk.data).decode("ascii")
+    if dumped.get("received_at") is not None:
+        # mode="python" keeps datetime objects; JSON storage needs an ISO string.
+        dumped["received_at"] = dumped["received_at"].isoformat()
     return dumped
 
 

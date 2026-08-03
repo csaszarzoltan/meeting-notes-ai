@@ -22,6 +22,36 @@ from meeting_notes_ai.live_session import LiveStartResponse
 pytestmark = pytest.mark.quick
 
 
+class _FakeTranscription:
+    """Duck-typed AI seam: deterministic transcript for WS/HTTP live tests."""
+
+    async def transcribe(self, audio_bytes, filename, language=None):
+        from meeting_notes_ai.models import TranscriptionResult, TranscriptSegment
+
+        return TranscriptionResult(
+            text="hello from the live ui",
+            language=language or "en",
+            duration_seconds=1.0,
+            segments=[
+                TranscriptSegment(start=0.0, end=1.0, text="hello from the live ui")
+            ],
+        )
+
+
+class _FakeExtraction:
+    """Duck-typed AI seam: deterministic extraction for WS/HTTP live tests."""
+
+    async def extract(self, transcript, mode=None):
+        from meeting_notes_ai.models import ActionItem, ExtractionResult
+
+        return ExtractionResult(
+            summary="UI test summary",
+            action_items=[ActionItem(assignee="QA", description="Verify live UI")],
+            decisions=[],
+            key_points=[],
+        )
+
+
 class TestLiveStartEndpointInterface:
     """Interface tests for the draft-meeting endpoint."""
 
@@ -122,34 +152,7 @@ class TestLiveStartEndpointBehavioral:
 
         # Override the AI seam so the WS flow runs without external keys.
         from meeting_notes_ai.main import app
-        from meeting_notes_ai.models import (
-            ActionItem,
-            ExtractionResult,
-            MeetingMode,
-            TranscriptionResult,
-            TranscriptSegment,
-        )
         from meeting_notes_ai.routes.live_transcription import get_live_service
-
-        class _FakeTranscription:
-            async def transcribe(self, audio_bytes, filename, language=None):
-                return TranscriptionResult(
-                    text="hello from the live ui",
-                    language=language or "en",
-                    duration_seconds=1.0,
-                    segments=[
-                        TranscriptSegment(start=0.0, end=1.0, text="hello from the live ui")
-                    ],
-                )
-
-        class _FakeExtraction:
-            async def extract(self, transcript, mode=MeetingMode.GENERAL):
-                return ExtractionResult(
-                    summary="UI test summary",
-                    action_items=[ActionItem(assignee="QA", description="Verify live UI")],
-                    decisions=[],
-                    key_points=[],
-                )
 
         service = LiveTranscriptionService(
             transcription_service=_FakeTranscription(),
@@ -175,6 +178,67 @@ class TestLiveStartEndpointBehavioral:
             assert finalized["meeting_id"] == meeting_id
             assert finalized["transcript"] == "hello from the live ui"
             assert finalized["action_items"][0]["description"] == "Verify live UI"
+        finally:
+            app.dependency_overrides.pop(get_live_service, None)
+
+    def test_ws_ingest_real_webm_emits_partial_and_survives(self, client):
+        """Regression (tester blocker): real WebM/Opus bytes are invalid UTF-8.
+
+        The chunk serializer used to ``model_dump(mode="json")`` which
+        utf-8-decodes bytes and raised UnicodeDecodeError mid-ingest — the WS
+        closed (code 1000) and NO partial frame was ever sent. Ingesting real
+        WebM bytes must emit a partial, keep the session alive, and still
+        finalize.
+        """
+        import asyncio
+        import json
+
+        from meeting_notes_ai.auth import create_access_token
+        from meeting_notes_ai.services.live_transcription import LiveTranscriptionService
+
+        # Real WebM/EBML header from a MediaRecorder — invalid UTF-8.
+        webm = (
+            b"\x1a\x45\xdf\xa3\x9f\x42\x86\x81\x01\x42\xf7\x81\x01"
+            b"\x42\xf2\x81\x02\x42\xf3\x81\x08\x42\x82\x84webm"
+        )
+        token = asyncio.run(create_access_token("test-user-id"))
+
+        from meeting_notes_ai.main import app
+        from meeting_notes_ai.routes.live_transcription import get_live_service
+
+        service = LiveTranscriptionService(
+            transcription_service=_FakeTranscription(),
+            extraction_service=_FakeExtraction(),
+        )
+        app.dependency_overrides[get_live_service] = lambda: service
+        try:
+            start = client.post("/api/v1/meetings/live/start", headers=self._auth_headers())
+            assert start.status_code == 201
+            meeting_id = start.json()["meeting_id"]
+
+            url = f"/api/v1/meetings/live?token={token}&meeting_id={meeting_id}"
+            with client.websocket_connect(url) as ws:
+                ws.send_bytes(webm)
+                partial = None
+                for _ in range(10):
+                    msg = ws.receive_json()
+                    if msg.get("type") == "partial":
+                        partial = msg
+                        break
+                assert partial is not None, "expected a partial after ingesting WebM bytes"
+                assert partial["text"] == "hello from the live ui"
+
+                # Session survived the ingest: finalize still works end-to-end.
+                ws.send_text(json.dumps({"type": "finalize"}))
+                finalized = None
+                for _ in range(10):
+                    msg = ws.receive_json()
+                    if msg.get("type") == "finalized":
+                        finalized = msg
+                        break
+                assert finalized is not None
+                assert finalized["meeting_id"] == meeting_id
+                assert finalized["transcript"] == "hello from the live ui"
         finally:
             app.dependency_overrides.pop(get_live_service, None)
 

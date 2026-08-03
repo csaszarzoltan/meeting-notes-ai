@@ -25,6 +25,7 @@ router, or the DB).
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 from uuid import uuid4
 
@@ -468,3 +469,63 @@ class TestLiveSessionPayloadContract:
         chunk = LiveChunk(sequence=1, format=LiveChunkFormat.PCM16K, data=b"\x00" * 3200)
         assert chunk.sequence == 1
         assert len(chunk.data) == 3200
+
+
+class TestChunkJsonSerialization:
+    """Binary-safe chunk serialization (regression: UnicodeDecodeError).
+
+    Real WebM/Opus MediaRecorder output is NOT valid UTF-8 (the WebM EBML
+    header contains byte 0x9F after 0xDF 0xA3). ``model_dump(mode="json")``
+    utf-8-decodes ``bytes`` fields and raises UnicodeDecodeError BEFORE the
+    base64 fix on ``data`` can run — the exact crash that killed real-mic
+    streaming (tester blocker t_8741722b, fixed by t_9fb6d453).
+    """
+
+    # Real WebM/EBML header as captured from a MediaRecorder (invalid UTF-8:
+    # 0x9F at position 4 is a lone continuation byte).
+    REAL_WEBM_HEADER = (
+        b"\x1a\x45\xdf\xa3\x9f\x42\x86\x81\x01\x42\xf7\x81\x01"
+        b"\x42\xf2\x81\x02\x42\xf3\x81\x08\x42\x82\x84webm"
+    )
+
+    def test_chunk_to_json_accepts_invalid_utf8_binary(self):
+        """The deterministic repro: must NOT raise UnicodeDecodeError."""
+        from meeting_notes_ai.services.live_transcription import _chunk_to_json
+
+        chunk = LiveChunk(
+            sequence=1, format=LiveChunkFormat.WEBM_OPUS, data=self.REAL_WEBM_HEADER
+        )
+        dumped = _chunk_to_json(chunk)  # raises before the fix
+        assert dumped["data"] == base64.b64encode(self.REAL_WEBM_HEADER).decode("ascii")
+
+    def test_chunk_to_json_output_is_json_serializable(self):
+        """``_apply_to_row`` json.dumps()s the output — no datetime/enum leaks."""
+        import json as _json
+        from datetime import datetime, timezone
+
+        from meeting_notes_ai.services.live_transcription import _chunk_to_json
+
+        chunk = LiveChunk(
+            sequence=3,
+            format=LiveChunkFormat.WEBM_OPUS,
+            data=self.REAL_WEBM_HEADER,
+            received_at=datetime(2026, 8, 3, 12, 0, 0, tzinfo=timezone.utc),
+        )
+        dumped = _chunk_to_json(chunk)
+        assert isinstance(dumped["received_at"], str)
+        assert _json.dumps(dumped)  # must not choke on datetime / enum
+
+    def test_chunk_json_round_trip_preserves_binary(self):
+        """Base64 in → raw bytes out; format + sequence survive the round trip."""
+        from meeting_notes_ai.services.live_transcription import (
+            _chunk_from_json,
+            _chunk_to_json,
+        )
+
+        chunk = LiveChunk(
+            sequence=7, format=LiveChunkFormat.WEBM_OPUS, data=self.REAL_WEBM_HEADER
+        )
+        restored = _chunk_from_json(_chunk_to_json(chunk))
+        assert restored.data == self.REAL_WEBM_HEADER
+        assert restored.format is LiveChunkFormat.WEBM_OPUS
+        assert restored.sequence == 7

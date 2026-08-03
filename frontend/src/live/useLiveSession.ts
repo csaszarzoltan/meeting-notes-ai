@@ -166,10 +166,19 @@ export function useLiveSession() {
       ws.onclose = (event: CloseEvent) => {
         // Stop the recorder; keep the session (it survives disconnects server-side).
         stopCapture();
-        if (statusRef.current === 'streaming' || statusRef.current === 'connecting') {
+        const inFlight =
+          statusRef.current === 'streaming' ||
+          statusRef.current === 'connecting' ||
+          statusRef.current === 'finalizing';
+        if (inFlight) {
           if (WS_RECONNECT_CLOSE_CODES.has(event.code)) {
             setErrorMsg(`Connection rejected (code ${event.code}). Check your token and meeting.`);
-          } else if (event.code !== 1000 && event.code !== 1005) {
+          } else {
+            // Any close while the session is in flight — including "normal"
+            // code 1000, which the backend uses when it crashes mid-stream —
+            // means no `finalized` frame arrived. Surfacing it prevents a
+            // silent hang (badge stuck on "Live — recording", unreachable
+            // Finalize button).
             setErrorMsg(`Connection closed unexpectedly (code ${event.code}).`);
           }
         }
@@ -196,6 +205,10 @@ export function useLiveSession() {
 
   const disconnect = useCallback(() => {
     stopCapture();
+    // Mark the session as no longer in flight BEFORE closing so the close
+    // handler does not surface a spurious "closed unexpectedly" error for a
+    // user-initiated disconnect.
+    if (statusRef.current !== 'finalized') statusRef.current = 'idle';
     wsRef.current?.close(1000, 'client disconnect');
     wsRef.current = null;
     if (statusRef.current !== 'finalized') setStatus('idle');
