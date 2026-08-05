@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import type { MeetingResult } from './types';
+import { ProcessingTimeline } from './ProcessingTimeline';
 
 /** Real upload-to-review flow backed by POST /api/v1/meetings. */
 export function UploadFlow({ onComplete }: { onComplete: (result: MeetingResult) => void }) {
@@ -14,7 +15,7 @@ export function UploadFlow({ onComplete }: { onComplete: (result: MeetingResult)
       <div className="form-grid"><label>Meeting type<select value={mode} onChange={(event) => { setMode(event.target.value); if (event.target.value !== 'healthcare') setConsent(false); }}><option value="general">General meeting</option><option value="healthcare">Healthcare consultation</option><option value="legal">Legal or deposition</option></select></label><label>Language<select><option>Auto-detect</option><option>English</option><option>Deutsch</option><option>Magyar</option></select></label></div>
       <div className="privacy-settings"><div className="privacy-title"><span>◈</span><div><strong>Privacy settings</strong><small>Visible now, not hidden in settings.</small></div></div><label className="toggle-row"><span><strong>Mask sensitive information</strong><small>{mode === 'healthcare' ? 'Required for Healthcare meetings' : 'Detect and redact PHI before review'}</small></span><input type="checkbox" checked={mode === 'healthcare'} readOnly /></label>{mode === 'healthcare' && <label className="consent-row"><input type="checkbox" checked={consent} onChange={(event) => setConsent(event.target.checked)} /><span><strong>Consent confirmed</strong><small>I confirm participants consented to this recording.</small></span></label>}</div>
       {error && <div className="error-banner" role="alert"><span>!</span><div><strong>We need one more thing</strong><p>{error}</p></div></div>}
-      {stage > 0 && <div className="progress-card" aria-live="polite"><div><strong>{stage === 1 ? 'Uploading securely' : stage === 2 ? 'Creating your notes' : 'Ready for review'}</strong><span>{stage} of 3</span></div><progress max="3" value={stage} /></div>}
+      {stage > 0 && <ProcessingTimeline active={stage === 1 ? 0 : stage === 2 ? 4 : 7} />}
       <button className="primary full large" onClick={() => void submit()} disabled={stage > 0 && stage < 3}>{stage ? 'Processing…' : 'Create meeting notes'} <span>→</span></button><p className="secure-note">⌁ Encrypted in transit · Never used to train shared models</p>
     </div></section>;
 }

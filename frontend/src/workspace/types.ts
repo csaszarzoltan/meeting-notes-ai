@@ -1,5 +1,5 @@
 /** Shared product-workspace models. */
-export type WorkspaceView = 'home' | 'meetings' | 'record' | 'batches' | 'actions' | 'team' | 'sharing' | 'compliance' | 'integrations' | 'settings';
+export type WorkspaceView = 'home' | 'meetings' | 'record' | 'batches' | 'actions' | 'team' | 'sharing' | 'insights' | 'compliance' | 'integrations' | 'settings';
 export type ReviewStatus = 'needs_review' | 'approved' | 'ready';
 export interface MeetingResult {
   id: string;

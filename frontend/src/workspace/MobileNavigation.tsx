@@ -1,0 +1,3 @@
+import type { WorkspaceView } from './types';
+/** Five-destination mobile navigation with a central capture action. */
+export function MobileNavigation({ active, onNavigate }: { active: WorkspaceView; onNavigate: (view: WorkspaceView) => void }) { const items: Array<[WorkspaceView,string,string]>=[['home','⌂','Home'],['meetings','◫','Meetings'],['record','●','Record'],['actions','✓','Actions'],['settings','•••','More']]; return <nav className="mobile-bottom-nav" aria-label="Mobile navigation">{items.map(([view,icon,label])=><button className={`${active===view?'active ':''}${view==='record'?'record':''}`} onClick={()=>onNavigate(view)} key={view}><span>{icon}</span>{label}</button>)}</nav>; }

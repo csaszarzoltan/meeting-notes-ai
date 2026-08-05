@@ -2,6 +2,12 @@
 
 MeetingNotesAI is a privacy-first meeting workspace that turns live or uploaded conversations into **verified notes and completed work**. The v0.9 interface unifies recording, meeting history, evidence-linked review, actions, sharing, teams, compliance, integrations, and settings in one responsive React application.
 
+## v1.0 complete meeting workflow GUI
+
+The product now implements the full **prepare → capture → process → review → approve → execute → share → retrieve** experience. New in v1.0: guided capture setup, a three-column live workspace, an eight-stage processing timeline, Action Center, Safe Sharing recipient preview, cited cross-meeting Insights, issue-first Compliance Center, batch recovery, integrations, governed settings, and mobile bottom navigation. These surfaces directly address the validated demand for outcome-first notes, visible privacy, source evidence, and action execution.
+
+See [`docs/GUI_SPECIFICATION.md`](docs/GUI_SPECIFICATION.md) for the functional and visual contract, and [`FEATURES-DONE.md`](FEATURES-DONE.md) for the machine-readable implementation manifest.
+
 ## v0.9 product experience
 
 The three highest-priority findings from `research-findings.md` now drive the product:

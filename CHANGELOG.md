@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.0] — 2026-08-05
+
+### Features
+
+- Completed guided capture across live, upload, calendar, and in-person modes with templates, consent, retention, and a visible privacy data path.
+- Added a three-column live workspace with recording health, speaker-confidence correction, bookmarks, and contextual intelligence.
+- Added an eight-stage processing timeline with preserved-work messaging and stage-level retry UX.
+- Added Action Center task confirmation, Safe Sharing recipient preview, cited Insights, issue-first Compliance, batch recovery, integrations, governed settings, and mobile navigation.
+
+### Fixes
+
+- Replaced priority-area placeholders with responsive workflow surfaces.
+- Embedded the durable processing timeline into the real upload flow.
+- Preserved 44px mobile targets, keyboard focus, reduced motion, and non-color status communication.
+
+### Tests
+
+- Added RED-to-GREEN contracts in `tests/test_complete_gui_v10.py`.
+- Verified the full Python suite, TypeScript typecheck, and production Vite build.
+
+### Docs
+
+- Updated README and `FEATURES-DONE.md` and added `docs/GUI_SPECIFICATION.md`.
+
+---
+
 ## [0.8.0] — 2026-08-03
 
 ### Added

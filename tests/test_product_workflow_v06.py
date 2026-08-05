@@ -53,11 +53,12 @@ def test_accessible_product_app_is_available():
     source = (Path(__file__).resolve().parents[1] / "frontend/src/App.tsx").read_text()
     assert 'id="main-content"' in source
     assert "Skip to main content" in source
-    upload_path = (
-        Path(__file__).resolve().parents[1] / "frontend/src/workspace/UploadFlow.tsx"
-    )
+    upload_path = Path(__file__).resolve().parents[1] / "frontend/src/workspace/UploadFlow.tsx"
     upload = upload_path.read_text()
-    assert 'aria-live="polite"' in upload
+    timeline = (
+        Path(__file__).resolve().parents[1] / "frontend/src/workspace/ProcessingTimeline.tsx"
+    ).read_text()
+    assert 'aria-live="polite"' in timeline
     assert "Privacy settings" in upload
 
 
