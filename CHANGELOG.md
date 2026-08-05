@@ -7,24 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [1.0.2] — 2026-08-05
+## [1.1.0] — 2026-08-05
 
-### Security
-- Require JWT authentication for every private workspace endpoint and isolate all state by user ID.
-- Add audited, expiring public-share resolution with active-state and revocation enforcement.
+### Modern GUI redesign
+- Reframed Home around the next best action, review queue, personal execution, workspace activity, and guided onboarding.
+- Added a keyboard-first global command palette with Cmd/Ctrl+K.
+- Rebuilt meeting review as an evidence-first studio with lifecycle guidance, autosave feedback, version context, confidence states, source navigation, and change comparison.
+- Added dedicated mobile Notes, Transcript, Evidence, and Actions tabs plus sticky playback and approval controls.
+- Added reusable loading, partial-success, offline, permission-denied, retry, empty, and skeleton states.
+- Added compact density and dark theme controls while preserving WCAG-oriented focus, motion, and touch-target behavior.
 
-### Features
-- Save processing results into the canonical meeting library before review.
-- Add a session-scoped React authentication gate and authenticated API client.
-- Queue connector work only after adapter configuration without fabricating vendor completion.
-- Derive compliance status from authenticated workspace settings.
-
-### Fixes
-- Disable unavailable capture previews and wire compliance/evidence actions to explicit targets.
-- Remove runtime database artifacts and add deterministic GitHub Actions verification.
-
-### Tests
-- Add anonymous-access rejection, cross-tenant isolation, complete create-review-share-public-revoke flow, connector queue, and derived-compliance integration coverage.
+### Verification
+- Added modern GUI source contracts and ran the complete regression suite.
 
 ---
 

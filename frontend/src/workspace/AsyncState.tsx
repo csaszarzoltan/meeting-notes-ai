@@ -1,0 +1,6 @@
+type AsyncKind='loading'|'partial'|'offline'|'denied'|'empty';
+const COPY:Record<AsyncKind,{title:string;body:string;icon:string}>={loading:{title:'Loading',body:'Preparing the latest verified workspace data.',icon:'◌'},partial:{title:'Partial success',body:'Your audio and transcript are safe. Some insights still need processing.',icon:'◐'},offline:{title:'Offline',body:'Changes are kept locally and will sync after connection returns.',icon:'⌁'},denied:{title:'Permission denied',body:'Ask a workspace admin for access to this protected content.',icon:'◈'},empty:{title:'Nothing here yet',body:'Your verified meeting outcomes will appear here.',icon:'◇'}};
+/** Reusable trust-building loading, partial, offline, permission, and empty states. */
+export function AsyncState({kind='loading',onRetry}:{kind?:AsyncKind;onRetry?:()=>void}){const copy=COPY[kind];return <section className={`async-state async-${kind}`} aria-live="polite"><span>{copy.icon}</span><div><strong>{copy.title}</strong><p>{copy.body}</p></div>{onRetry&&<button className="secondary" onClick={onRetry}>Retry</button>}</section>}
+/** Stable skeleton cards that prevent layout shifts while data loads. */
+export function SkeletonGrid(){return <div className="skeleton-grid" aria-label="Loading workspace"><i/><i/><i/><i/></div>}

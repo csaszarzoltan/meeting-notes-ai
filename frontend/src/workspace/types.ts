@@ -18,5 +18,5 @@ export interface MeetingCard {
   id: string; title: string; date: string; duration: string; mode: string; status?: ReviewStatus; review_status?: ReviewStatus; participants: number; summary: string; owner?: string; sensitivity?: string;
 }
 export interface Evidence { timestamp: string; speaker: string; text: string; confidence: number; }
-export interface MeetingDetail extends MeetingCard { transcript: string; decisions: Array<string | {text: string; timestamp: string; confidence: number}>; key_points: string[]; evidence: Evidence[]; versions: Array<{number:number; reviewer:string; at:string; status:string}>; audio_url?: string; }
+export interface MeetingDetail extends MeetingCard { action_items?: Array<{assignee?: string | null; description: string; deadline?: string | null}>; transcript: string; decisions: Array<string | {text: string; timestamp: string; confidence: number}>; key_points: string[]; evidence: Evidence[]; versions: Array<{number:number; reviewer:string; at:string; status:string}>; audio_url?: string; }
 

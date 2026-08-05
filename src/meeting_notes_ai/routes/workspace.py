@@ -21,7 +21,7 @@ _LOCK = threading.RLock()
 
 
 def _seed_workspace(user_id: str) -> dict[str, Any]:
-    """Create a private first-run workspace for one authenticated user."""
+    """Return an empty, private first-run workspace."""
     return {
         "owner_id": user_id,
         "meetings": [],
@@ -46,14 +46,15 @@ def _seed_workspace(user_id: str) -> dict[str, Any]:
 
 
 def _read_document() -> dict[str, Any]:
-    """Read the complete tenant document from disk."""
+    """Read the complete tenant document."""
     with _LOCK:
         if not _STATE_PATH.exists():
             return {"schema_version": 2, "workspaces": {}}
-        document = json.loads(_STATE_PATH.read_text(encoding="utf-8"))
-        if "workspaces" not in document:
-            return {"schema_version": 2, "workspaces": {}}
-        return document
+        try:
+            value = json.loads(_STATE_PATH.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise HTTPException(status_code=503, detail="Workspace state is unavailable") from exc
+        return value if "workspaces" in value else {"schema_version": 2, "workspaces": {}}
 
 
 def _write_document(document: dict[str, Any]) -> None:
@@ -65,24 +66,21 @@ def _write_document(document: dict[str, Any]) -> None:
         temporary.replace(_STATE_PATH)
 
 
-def _read_state(user_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Return document and isolated workspace for one user."""
+def _workspace(user_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
     document = _read_document()
-    workspace = document["workspaces"].setdefault(user_id, _seed_workspace(user_id))
+    state = document["workspaces"].setdefault(user_id, _seed_workspace(user_id))
     _write_document(document)
-    return document, workspace
+    return document, state
 
 
 def _find(items: list[dict[str, Any]], item_id: str, label: str) -> dict[str, Any]:
-    """Find an item by identifier or raise a precise 404."""
-    item = next((value for value in items if value["id"] == item_id), None)
+    item = next((item for item in items if item["id"] == item_id), None)
     if item is None:
         raise HTTPException(status_code=404, detail=f"{label} not found")
     return item
 
 
 def _audit(state: dict[str, Any], event: str, details: dict[str, Any]) -> None:
-    """Append an immutable, timestamped audit event."""
     state["audit"].append(
         {
             "id": str(uuid4()),
@@ -93,95 +91,114 @@ def _audit(state: dict[str, Any], event: str, details: dict[str, Any]) -> None:
     )
 
 
-def _expiry(expires_in: str) -> datetime | None:
-    """Convert a supported share expiry value to an absolute time."""
-    delta = {"1h": timedelta(hours=1), "24h": timedelta(hours=24), "7d": timedelta(days=7)}.get(
-        expires_in
-    )
-    return datetime.now(timezone.utc) + delta if delta else None
-
-
 class MeetingCreate(BaseModel):
-    """Canonical meeting payload created from upload, live, or batch output."""
+    """Canonical meeting payload created from processing output."""
 
     id: str | None = None
-    title: str = Field(default="Untitled meeting", max_length=300)
-    transcript: str = Field(min_length=1)
-    summary: str = ""
-    action_items: list[Any] = []
-    decisions: list[Any] = []
-    key_points: list[str] = []
-    mode: str = "general"
-    warnings: list[str] = []
+    title: str = Field(default="Untitled meeting", min_length=1, max_length=300)
+    transcript: str = Field(min_length=1, max_length=1_000_000)
+    summary: str = Field(default="", max_length=100_000)
+    action_items: list[Any] = Field(default_factory=list)
+    decisions: list[Any] = Field(default_factory=list)
+    key_points: list[str] = Field(default_factory=list)
+    mode: str = Field(default="general", pattern="^(general|healthcare|legal)$")
+    warnings: list[str] = Field(default_factory=list)
     phi_redacted: bool = False
-    redaction_matches: int = 0
+    redaction_matches: int = Field(default=0, ge=0)
 
 
 class ReviewUpdate(BaseModel):
-    """Editable and approvable meeting review fields."""
+    """Editable and approvable review fields."""
 
-    summary: str = Field(min_length=1, max_length=20_000)
+    summary: str = Field(min_length=1, max_length=100_000)
     review_status: str = Field(pattern="^(needs_review|in_review|approved|rejected)$")
     reviewer: str = Field(min_length=1, max_length=100)
     comment: str | None = Field(default=None, max_length=1000)
 
 
 class ActionUpdate(BaseModel):
-    """Mutable action ownership and status fields."""
+    """Mutable action fields."""
 
     status: str = Field(pattern="^(suggested|confirmed|queued|completed)$")
     owner: str = Field(min_length=1, max_length=100)
     due: str = Field(min_length=1, max_length=50)
 
 
-class SyncRequest(BaseModel):
+class DestinationRequest(BaseModel):
     """Requested connector destination."""
 
     destination: str = Field(min_length=1, max_length=100)
 
 
 class InsightRequest(BaseModel):
-    """Cross-meeting workspace query."""
+    """Private workspace query."""
 
     query: str = Field(min_length=2, max_length=500)
 
 
-class WorkspaceShareRequest(BaseModel):
+class ShareRequest(BaseModel):
     """Backend-enforced share controls."""
 
     expires_in: str = Field(default="7d", pattern="^(1h|24h|7d|never)$")
 
 
+def _expires(value: str) -> str | None:
+    delta = {"1h": timedelta(hours=1), "24h": timedelta(days=1), "7d": timedelta(days=7)}.get(value)
+    return (datetime.now(timezone.utc) + delta).isoformat() if delta else None
+
+
 @router.get("/dashboard")
 async def dashboard(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
-    """Return outcome metrics scoped to the authenticated user."""
-    _, state = _read_state(user["user_id"])
+    """Return trusted outcome metrics for the authenticated user."""
+    _, state = _workspace(user["user_id"])
     return {
         "needs_review": sum(m["review_status"] == "needs_review" for m in state["meetings"]),
         "open_actions": sum(a["status"] != "completed" for a in state["actions"]),
         "processing_failures": sum(b.get("failed", 0) for b in state["batches"]),
         "time_saved_hours": round(len(state["meetings"]) * 0.5, 1),
         "recent_meetings": state["meetings"][:5],
-        "my_actions": [a for a in state["actions"] if a.get("owner_id") == user["user_id"]][:5],
+        "my_actions": state["actions"][:5],
+        "activity": state["audit"][-5:],
+        "onboarding_complete": bool(state["meetings"]),
     }
 
 
 @router.get("/meetings")
-async def meetings(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
-    """List meetings owned by the authenticated workspace."""
-    _, state = _read_state(user["user_id"])
-    return {"items": state["meetings"]}
+async def list_meetings(
+    user: dict[str, Any] = Depends(get_current_user), q: str = ""
+) -> dict[str, Any]:
+    """List or search meetings in the authenticated workspace."""
+    _, state = _workspace(user["user_id"])
+    query = q.casefold().strip()
+    items = state["meetings"]
+    if query:
+        items = [
+            m
+            for m in items
+            if query
+            in " ".join(
+                [
+                    m["title"],
+                    m["summary"],
+                    m["transcript"],
+                    " ".join(m.get("tags", [])),
+                    " ".join(str(x) for x in m.get("decisions", [])),
+                ]
+            ).casefold()
+        ]
+    return {"items": items}
 
 
 @router.post("/meetings", status_code=201)
 async def create_meeting(
     request: MeetingCreate, user: dict[str, Any] = Depends(get_current_user)
 ) -> dict[str, Any]:
-    """Save a processing result as the canonical meeting record."""
-    document, state = _read_state(user["user_id"])
+    """Save a processed result as a canonical private meeting."""
+    document, state = _workspace(user["user_id"])
     meeting_id = request.id or str(uuid4())
-    if any(item["id"] == meeting_id for item in state["meetings"]):
+    if any(m["id"] == meeting_id for m in state["meetings"]):
         meeting_id = str(uuid4())
+    raw = request.model_dump(exclude={"id"})
     evidence = [
         {
             "timestamp": "00:00",
@@ -191,7 +208,7 @@ async def create_meeting(
         }
     ]
     meeting = {
-        **request.model_dump(exclude={"id"}),
+        **raw,
         "id": meeting_id,
         "owner_id": user["user_id"],
         "date": datetime.now(timezone.utc).isoformat(),
@@ -206,24 +223,24 @@ async def create_meeting(
         "audio_url": None,
     }
     state["meetings"].append(meeting)
-    for index, action in enumerate(request.action_items):
-        description = action if isinstance(action, str) else action.get("description", "Action")
+    for item in request.action_items:
+        value = item if isinstance(item, dict) else {"description": str(item)}
         state["actions"].append(
             {
                 "id": str(uuid4()),
-                "title": description,
-                "owner": action.get("assignee") if isinstance(action, dict) else "Unassigned",
+                "title": value.get("description", "Action"),
+                "owner": value.get("assignee") or "Unassigned",
                 "owner_id": user["user_id"],
-                "due": action.get("deadline") if isinstance(action, dict) else "Unscheduled",
+                "due": value.get("deadline") or "Unscheduled",
                 "meeting_id": meeting_id,
                 "meeting": meeting["title"],
-                "timestamp": evidence[min(index, len(evidence) - 1)]["timestamp"],
+                "timestamp": "00:00",
                 "status": "suggested",
                 "destination": "Not selected",
                 "external_id": None,
             }
         )
-    _audit(state, "meeting.created", {"meeting_id": meeting_id, "source": "processing"})
+    _audit(state, "meeting.created", {"meeting_id": meeting_id})
     _write_document(document)
     return meeting
 
@@ -232,19 +249,17 @@ async def create_meeting(
 async def meeting_detail(
     meeting_id: str, user: dict[str, Any] = Depends(get_current_user)
 ) -> dict[str, Any]:
-    """Return one meeting from the authenticated workspace."""
-    _, state = _read_state(user["user_id"])
+    """Return one owned meeting."""
+    _, state = _workspace(user["user_id"])
     return _find(state["meetings"], meeting_id, "Meeting")
 
 
 @router.patch("/meetings/{meeting_id}/review")
 async def update_review(
-    meeting_id: str,
-    request: ReviewUpdate,
-    user: dict[str, Any] = Depends(get_current_user),
+    meeting_id: str, request: ReviewUpdate, user: dict[str, Any] = Depends(get_current_user)
 ) -> dict[str, Any]:
-    """Persist review changes and an immutable version."""
-    document, state = _read_state(user["user_id"])
+    """Persist review edits and immutable provenance."""
+    document, state = _workspace(user["user_id"])
     meeting = _find(state["meetings"], meeting_id, "Meeting")
     version = {
         "number": len(meeting["versions"]) + 1,
@@ -255,7 +270,7 @@ async def update_review(
         "comment": request.comment,
         "at": datetime.now(timezone.utc).isoformat(),
     }
-    meeting.update({"summary": request.summary, "review_status": request.review_status})
+    meeting.update(summary=request.summary, review_status=request.review_status)
     meeting["versions"].append(version)
     _audit(state, "meeting.reviewed", {"meeting_id": meeting_id, "version": version["number"]})
     _write_document(document)
@@ -263,46 +278,40 @@ async def update_review(
 
 
 @router.get("/actions")
-async def actions(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
-    """List actions from the authenticated workspace."""
-    _, state = _read_state(user["user_id"])
+async def list_actions(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    """List private workspace actions."""
+    _, state = _workspace(user["user_id"])
     return {"items": state["actions"]}
 
 
 @router.patch("/actions/{action_id}")
 async def update_action(
-    action_id: str,
-    request: ActionUpdate,
-    user: dict[str, Any] = Depends(get_current_user),
+    action_id: str, request: ActionUpdate, user: dict[str, Any] = Depends(get_current_user)
 ) -> dict[str, Any]:
-    """Persist action ownership, deadline, and status."""
-    document, state = _read_state(user["user_id"])
+    """Persist action ownership, due date, and status."""
+    document, state = _workspace(user["user_id"])
     action = _find(state["actions"], action_id, "Action")
     action.update(request.model_dump())
-    _audit(state, "action.updated", {"action_id": action_id, "status": request.status})
+    _audit(state, "action.updated", {"action_id": action_id})
     _write_document(document)
     return action
 
 
 @router.post("/actions/{action_id}/queue")
 async def queue_action(
-    action_id: str,
-    request: SyncRequest,
-    user: dict[str, Any] = Depends(get_current_user),
+    action_id: str, request: DestinationRequest, user: dict[str, Any] = Depends(get_current_user)
 ) -> dict[str, Any]:
-    """Queue an action for a configured external adapter without faking vendor completion."""
-    document, state = _read_state(user["user_id"])
+    """Queue work for a configured provider adapter without claiming remote completion."""
+    document, state = _workspace(user["user_id"])
     action = _find(state["actions"], action_id, "Action")
     connector = state["integrations"].get(request.destination)
     if not connector or not connector["connected"]:
         raise HTTPException(status_code=409, detail="Connect an adapter before queuing this action")
     action.update(
-        {
-            "destination": request.destination,
-            "status": "queued",
-            "external_id": None,
-            "adapter_job_id": str(uuid4()),
-        }
+        destination=request.destination,
+        status="queued",
+        external_id=None,
+        adapter_job_id=str(uuid4()),
     )
     _audit(state, "action.queued", {"action_id": action_id, "destination": request.destination})
     _write_document(document)
@@ -311,16 +320,15 @@ async def queue_action(
 
 @router.get("/settings")
 async def get_settings(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
-    """Return settings for the authenticated workspace."""
-    _, state = _read_state(user["user_id"])
-    return state["settings"]
+    """Return private workspace settings."""
+    return _workspace(user["user_id"])[1]["settings"]
 
 
 @router.put("/settings")
 async def put_settings(
     request: dict[str, Any], user: dict[str, Any] = Depends(get_current_user)
 ) -> dict[str, Any]:
-    """Persist an allow-listed set of workspace settings."""
+    """Persist allow-listed workspace settings."""
     allowed = {
         "processing_region",
         "retention_days",
@@ -333,7 +341,7 @@ async def put_settings(
     unknown = set(request) - allowed
     if unknown:
         raise HTTPException(status_code=422, detail=f"Unknown settings: {sorted(unknown)}")
-    document, state = _read_state(user["user_id"])
+    document, state = _workspace(user["user_id"])
     state["settings"].update(request)
     _audit(state, "settings.updated", {"keys": sorted(request)})
     _write_document(document)
@@ -342,19 +350,16 @@ async def put_settings(
 
 @router.get("/integrations")
 async def integrations(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
-    """List connector configuration for the authenticated workspace."""
-    _, state = _read_state(user["user_id"])
-    return {"items": state["integrations"]}
+    """List connector configuration."""
+    return {"items": _workspace(user["user_id"])[1]["integrations"]}
 
 
 @router.post("/integrations/{name}/connect")
 async def connect_integration(
-    name: str,
-    request: dict[str, Any],
-    user: dict[str, Any] = Depends(get_current_user),
+    name: str, request: dict[str, Any], user: dict[str, Any] = Depends(get_current_user)
 ) -> dict[str, Any]:
-    """Enable or disable a deployment-provided connector adapter."""
-    document, state = _read_state(user["user_id"])
+    """Enable a deployment-provided adapter without accepting credentials."""
+    document, state = _workspace(user["user_id"])
     if name not in state["integrations"]:
         raise HTTPException(status_code=404, detail="Integration not found")
     state["integrations"][name]["connected"] = bool(request.get("enabled", True))
@@ -367,14 +372,16 @@ async def connect_integration(
 async def query_insights(
     request: InsightRequest, user: dict[str, Any] = Depends(get_current_user)
 ) -> dict[str, Any]:
-    """Search private meeting evidence and return cited source moments."""
-    _, state = _read_state(user["user_id"])
+    """Search private meeting evidence and return citations."""
+    _, state = _workspace(user["user_id"])
     query = request.query.casefold()
     sources = []
     for meeting in state["meetings"]:
         for evidence in meeting["evidence"]:
-            haystack = f"{meeting['title']} {meeting['summary']} {evidence['text']}".casefold()
-            if query in haystack or any(token in haystack for token in query.split()):
+            if any(
+                token in f"{meeting['title']} {meeting['summary']} {evidence['text']}".casefold()
+                for token in query.split()
+            ):
                 sources.append(
                     {"meeting_id": meeting["id"], "meeting": meeting["title"], **evidence}
                 )
@@ -386,8 +393,8 @@ async def query_insights(
 
 @router.get("/compliance")
 async def compliance(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
-    """Derive current controls from policy settings and the workspace audit trail."""
-    _, state = _read_state(user["user_id"])
+    """Derive evidence-backed controls from current workspace policy."""
+    _, state = _workspace(user["user_id"])
     settings = state["settings"]
     now = datetime.now(timezone.utc).isoformat()
     controls = [
@@ -419,32 +426,29 @@ async def compliance(user: dict[str, Any] = Depends(get_current_user)) -> dict[s
 
 @router.get("/batches")
 async def list_batches(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
-    """Return batches from the authenticated workspace."""
-    _, state = _read_state(user["user_id"])
-    return {"items": state["batches"]}
+    """List tenant-scoped background jobs."""
+    return {"items": _workspace(user["user_id"])[1]["batches"]}
 
 
 @router.post("/batches/{batch_id}/retry")
 async def retry_batch(
     batch_id: str, user: dict[str, Any] = Depends(get_current_user)
 ) -> dict[str, Any]:
-    """Retry failed batch items while preserving completed work."""
-    document, state = _read_state(user["user_id"])
+    """Retry failed work while preserving complete items."""
+    document, state = _workspace(user["user_id"])
     batch = _find(state["batches"], batch_id, "Batch")
-    batch.update({"status": "processing", "failed": 0})
+    batch.update(status="processing", failed=0)
     _audit(state, "batch.retried", {"batch_id": batch_id})
     _write_document(document)
     return batch
 
 
 @router.post("/meetings/{meeting_id}/share", status_code=201)
-async def share_workspace_meeting(
-    meeting_id: str,
-    request: WorkspaceShareRequest,
-    user: dict[str, Any] = Depends(get_current_user),
+async def create_share(
+    meeting_id: str, request: ShareRequest, user: dict[str, Any] = Depends(get_current_user)
 ) -> dict[str, Any]:
-    """Create a private, expiring share for an approved owned meeting."""
-    document, state = _read_state(user["user_id"])
+    """Create an expiring share for an approved owned meeting."""
+    document, state = _workspace(user["user_id"])
     meeting = _find(state["meetings"], meeting_id, "Meeting")
     if meeting["review_status"] != "approved":
         raise HTTPException(status_code=409, detail="Approve the meeting before sharing")
@@ -452,9 +456,7 @@ async def share_workspace_meeting(
         "id": str(uuid4()),
         "meeting_id": meeting_id,
         "token": uuid4().hex + uuid4().hex,
-        "expires_at": _expiry(request.expires_in).isoformat()
-        if _expiry(request.expires_in)
-        else None,
+        "expires_at": _expires(request.expires_in),
         "active": True,
         "created_by": user["user_id"],
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -467,11 +469,9 @@ async def share_workspace_meeting(
 
 
 @router.delete("/shares/{share_id}", status_code=204)
-async def revoke_workspace_share(
-    share_id: str, user: dict[str, Any] = Depends(get_current_user)
-) -> None:
-    """Immediately revoke a share owned by the authenticated workspace."""
-    document, state = _read_state(user["user_id"])
+async def revoke_share(share_id: str, user: dict[str, Any] = Depends(get_current_user)) -> None:
+    """Immediately revoke an owned share."""
+    document, state = _workspace(user["user_id"])
     share = _find(state["shares"], share_id, "Share")
     share["active"] = False
     _audit(state, "share.revoked", {"share_id": share_id})
@@ -479,8 +479,8 @@ async def revoke_workspace_share(
 
 
 @public_router.get("/{token}")
-async def resolve_public_share(token: str) -> dict[str, Any]:
-    """Resolve an active, unexpired share and record anonymous access."""
+async def resolve_share(token: str) -> dict[str, Any]:
+    """Resolve an active, unexpired share and audit its access."""
     document = _read_document()
     for state in document["workspaces"].values():
         share = next((item for item in state["shares"] if item["token"] == token), None)

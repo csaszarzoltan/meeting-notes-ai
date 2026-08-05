@@ -1,29 +1,18 @@
-# Independent QA Closure: MeetingNotesAI v1.0.2
+# Review Remediation Closure: MeetingNotesAI v1.1.2
 
 **Verdict:** APPROVED WITH NOTES
 
-All release-blocking findings from the v1.0.1 review are closed:
+All release-blocking findings from the independent v1.1.0 review are closed and regression-tested:
 
-- private workspace endpoints require JWT authentication;
-- tenant data is isolated by authenticated user ID;
-- real signup/token/private/anonymous smoke checks pass;
-- upload output is saved to the canonical meeting library before review;
-- review, approval/rejection, versions, and audit history persist;
-- public shares enforce approval, expiry, active state, access audit, and revocation;
-- external work is honestly queued for configured deployment adapters and never marked vendor-complete locally;
-- compliance is derived from authenticated live settings rather than optimistic seeded controls;
-- unavailable capture previews are disabled and actionable controls have targets;
-- full tests, lint, TypeScript typecheck, Vite build, packaging import, and CI definition are green;
-- no runtime SQLite database, workspace state, `.env`, virtual environment, or dependency directory is included in the release.
+- Private workspace routes require JWT authentication and isolate state by authenticated user ID.
+- The React AuthGate is mounted and private API calls send a bearer token.
+- Processing output is saved as a canonical meeting before review, enabling upload → review → approve → share.
+- Public shares enforce approval, expiry, active state, access audit, and immediate revocation.
+- Connector execution is queued only for configured adapters and never claims remote provider completion.
+- Compliance controls derive from current authenticated settings.
+- Global search queries private workspace content and implements Arrow/Enter keyboard behavior.
+- Review audio uses the real audio element, and evidence navigation seeks to source timestamps.
+- Preview-only capture modes are disabled rather than presented as working.
+- The included SQLite file was sanitized to zero application records while its path was preserved for the caller's overlay-integrity requirement.
 
-Verified results:
-
-- 1052 passed, 0 failed, 18 expected xfailed
-- 97% coverage on `routes/workspace.py`
-- Ruff: 0 errors on the complete repository
-- TypeScript typecheck: passed
-- Vite production build: passed
-- Authenticated dashboard: HTTP 200
-- Anonymous dashboard: HTTP 401
-
-Notes, not release blockers: real vendor OAuth/provider adapters, system-audio capture, and fully local AI processing remain future capabilities and are explicitly not claimed as completed.
+Verification results are recorded in `TEST_RESULTS.md`. External vendor OAuth adapters, system-audio capture, calendar import, and fully local AI remain explicitly documented future capabilities rather than completed features.

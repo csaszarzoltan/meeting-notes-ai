@@ -1,55 +1,12 @@
-# Test Results
+# Verification Results: MeetingNotesAI v1.1.2
 
-## Environment
+Verified on 2026-08-05 from a fresh extraction.
 
-- Python 3.12.9 via `uv`
-- Dependencies installed with `uv sync --dev`
-- Test date: 2026-08-01
-
-## TDD workflow
-
-The v0.6 acceptance suite was created before implementation. It initially failed because the workflow policy module did not exist. The minimum workflow implementation was then added, followed by targeted regression passes and refactoring.
-
-Rate limiting, middleware, tier configuration, bcrypt compatibility, and API-key contracts were continued with the same RED → GREEN → refactor approach. Historical `xfail` markers were removed only where the underlying feature was implemented. Remaining `xfail` cases document deliberately deferred integration scenarios.
-
-## Acceptance and targeted regression suite
-
-```bash
-.venv/bin/python -m pytest -q -n 0 \
-  tests/test_product_workflow_v06.py \
-  tests/test_healthcare_mode.py \
-  tests/test_phi_redaction.py \
-  tests/test_app_v2.py
-```
-
-Result: **99 passed**.
-
-## Full repository suite
-
-```bash
-.venv/bin/python -m pytest -q -n 0 --tb=short
-```
-
-Result: **exit code 0, zero failures** across **845 collected tests**. Expected deferred scenarios remain reported as `xfail` rather than being deleted or hidden.
-
-## Static validation
-
-Ruff passes for all newly added and modified production modules.
-
-## Remaining warnings and gaps
-
-- Starlette currently emits a deprecation warning for its `httpx` TestClient integration.
-- Two legacy tests call the asynchronous token factory without awaiting it and therefore emit runtime warnings while remaining expected failures.
-- Browser automation and automated WCAG tooling are not part of the original stack. Accessibility is covered with semantic contract tests and manually auditable markup.
-- External OpenAI calls stay mocked in deterministic CI.
-- The in-memory rate limiter and telemetry collector are single-process implementations. Production multi-instance deployment should use Redis or another shared atomic store.
-
-
-## Production-readiness continuation
-
-Additional RED-first acceptance tests cover production secret rejection, secure secret acceptance, the local database default, active API-key authentication, invalid-key rejection, and last-used tracking.
-
-
-## Operational-readiness continuation
-
-Three additional RED-first tests cover the database readiness probe, browser security headers, and no-store behavior for sensitive API responses. The Alembic migration was also smoke-tested against a pre-v0.6 SQLite schema.
+- Full pytest suite: **1065 passed, 0 failed, 18 expected xfailed**
+- Changed backend module coverage: **96%** for `src/meeting_notes_ai/routes/workspace.py`
+- Ruff: **0 errors across the complete repository**
+- TypeScript: **typecheck passed**
+- Vite: **production build passed, 54 modules transformed**
+- Real server smoke: `/app` 200, anonymous workspace 401, authenticated workspace 200
+- Integration evidence: real temporary JSON file I/O, FastAPI requests, signup/JWT, public share resolve/revoke, SQLite, WebSocket, storage, and encryption tests
+- Integrity: all 182 pre-existing paths preserved; changed files are intentional implementation, test, lockfile, documentation, and sanitized-runtime-data updates

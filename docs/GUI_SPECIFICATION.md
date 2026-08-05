@@ -39,3 +39,7 @@ The product uses a calm dark navigation, light content surfaces, one deep-purple
 ## v1.0.1 persistence contract
 
 The React workspace now reads and writes `/api/v1/workspace/*`. The service atomically persists local workspace state under `data/workspace_state.json`, which is intentionally ignored by Git. Review updates create immutable version and audit records. Action synchronization uses connector adapters and returns durable provider-shaped external references; vendor OAuth and remote API credentials remain deployment-specific. Safe sharing is limited to backend-enforced expiry, approval gating, persistence, and revocation. Unsupported passcode/domain/permission claims were removed.
+
+## v1.1.0 modern experience system
+
+The primary hierarchy is now **next action → meeting lifecycle → verified record → accountable execution**. Home prioritizes review and action queues instead of transcript volume. The global Command Palette provides keyboard-first search and navigation. Meeting Review is a dedicated studio with lifecycle state, autosave feedback, source confidence, previous/next evidence, original/current comparison, mobile content tabs, sticky playback, and explicit approval controls. The design system also includes compact density, dark theme, skeletons, and reusable loading, partial-success, offline, permission-denied, retry, and empty states.
