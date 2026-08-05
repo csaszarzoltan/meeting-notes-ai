@@ -7,6 +7,7 @@ the quick suite and CI stay green on infra alone (AC6/AC7).
 
 from __future__ import annotations
 
+import os
 import socket
 
 import pytest
@@ -29,7 +30,7 @@ def _minio_reachable() -> bool:
         return False
 
 
-if not _minio_reachable():
+if os.getenv("RUN_S3_INTEGRATION") != "1" or not _minio_reachable():
     pytest.skip(
         "MinIO unreachable at 127.0.0.1:9000 — start it with: "
         "docker compose -f docker-compose.dev.yml up -d minio",

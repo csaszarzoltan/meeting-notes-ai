@@ -8,6 +8,7 @@ Module under test:
   src/meeting_notes_ai/hipaa/audit_logger.py  — AuditEntry, AuditLogger
   src/meeting_notes_ai/hipaa/config.py        — HIPAAConfig
 """
+
 from __future__ import annotations
 
 from dataclasses import fields, is_dataclass
@@ -280,9 +281,7 @@ class TestAuditLoggerBehavioral:
         from meeting_notes_ai.hipaa.audit_logger import AuditLogger
         from meeting_notes_ai.hipaa.config import HIPAAConfig
 
-        return AuditLogger(
-            config=HIPAAConfig(audit_log_dir=str(tmp_path / "audit"))
-        )
+        return AuditLogger(config=HIPAAConfig(audit_log_dir=str(tmp_path / "audit")))
 
     @pytest.fixture
     def sample_entry(self):
@@ -348,7 +347,7 @@ class TestAuditLoggerBehavioral:
 
             await logger.log(
                 AuditEntry(
-                    timestamp=f"2026-07-30T{12+i:02d}:00:00Z",
+                    timestamp=f"2026-07-30T{12 + i:02d}:00:00Z",
                     actor=f"user-{i}",
                     action="test",
                     resource="test",
@@ -378,9 +377,7 @@ class TestAuditLoggerBehavioral:
     async def test_export_range_returns_path(self, logger, sample_entry):
         """export_range() returns a file with entries in the date range."""
         await logger.log(sample_entry)
-        export_path = await logger.export_range(
-            start="2026-07-01", end="2026-07-31"
-        )
+        export_path = await logger.export_range(start="2026-07-01", end="2026-07-31")
         assert isinstance(export_path, Path) or isinstance(export_path, str)
 
     @pytest.mark.asyncio
@@ -417,9 +414,7 @@ class TestAuditLoggerTailRobustness:
         from meeting_notes_ai.hipaa.audit_logger import AuditLogger
         from meeting_notes_ai.hipaa.config import HIPAAConfig
 
-        return AuditLogger(
-            config=HIPAAConfig(audit_log_dir=str(tmp_path / "audit"))
-        )
+        return AuditLogger(config=HIPAAConfig(audit_log_dir=str(tmp_path / "audit")))
 
     @pytest.fixture
     def entry_factory(self):
@@ -438,9 +433,7 @@ class TestAuditLoggerTailRobustness:
         return make
 
     @pytest.mark.asyncio
-    async def test_partial_tail_line_does_not_swallow_next_entry(
-        self, logger, entry_factory
-    ):
+    async def test_partial_tail_line_does_not_swallow_next_entry(self, logger, entry_factory):
         """S11: a partial trailing line (crash mid-write) must not eat the
         next entry — it survives on its own line, the partial line is
         counted as corrupt, and the hash chain stays unbroken."""
@@ -477,9 +470,7 @@ class TestAuditLoggerTailRobustness:
         from meeting_notes_ai.hipaa.audit_logger import AuditLogger
         from meeting_notes_ai.hipaa.config import HIPAAConfig
 
-        fresh = AuditLogger(
-            config=HIPAAConfig(audit_log_dir=str(tmp_path / "audit"))
-        )
+        fresh = AuditLogger(config=HIPAAConfig(audit_log_dir=str(tmp_path / "audit")))
         await fresh.log(entry_factory("2026-07-30T12:00:02Z"))
 
         stats = await fresh.get_stats()
@@ -488,9 +479,7 @@ class TestAuditLoggerTailRobustness:
         assert stats["total_entries"] == 2
 
     @pytest.mark.asyncio
-    async def test_append_reuses_in_memory_chain_head(
-        self, logger, entry_factory, monkeypatch
-    ):
+    async def test_append_reuses_in_memory_chain_head(self, logger, entry_factory, monkeypatch):
         """S10: once the in-memory chain head is known, appends must not
         re-read the file to find it (no O(n^2) tail scans)."""
         import meeting_notes_ai.hipaa.audit_logger as audit_module

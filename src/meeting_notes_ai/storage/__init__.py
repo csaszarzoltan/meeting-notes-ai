@@ -12,10 +12,10 @@ Public API:
 
 from meeting_notes_ai.storage.base import ObjectStorageBackend
 from meeting_notes_ai.storage.encryption import (
-    EncryptionError,
-    FileEncryptor,
     MODE_AES256GCM,
     MODE_NONE,
+    EncryptionError,
+    FileEncryptor,
 )
 from meeting_notes_ai.storage.factory import get_storage_backend
 from meeting_notes_ai.storage.local import LocalStorageBackend

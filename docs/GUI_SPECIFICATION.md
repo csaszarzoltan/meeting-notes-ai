@@ -35,3 +35,7 @@ The product uses a calm dark navigation, light content surfaces, one deep-purple
 - `POST /api/v1/meetings/live/start` and `WS /api/v1/meetings/live` for live capture
 - `POST /api/v1/meetings/{meeting_id}/share` for secure share creation
 - Existing batch, team, audit, compliance, webhook, and storage APIs remain authoritative for subsequent data wiring
+
+## v1.0.1 persistence contract
+
+The React workspace now reads and writes `/api/v1/workspace/*`. The service atomically persists local workspace state under `data/workspace_state.json`, which is intentionally ignored by Git. Review updates create immutable version and audit records. Action synchronization uses connector adapters and returns durable provider-shaped external references; vendor OAuth and remote API credentials remain deployment-specific. Safe sharing is limited to backend-enforced expiry, approval gating, persistence, and revocation. Unsupported passcode/domain/permission claims were removed.

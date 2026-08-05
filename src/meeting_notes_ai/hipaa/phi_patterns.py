@@ -4,6 +4,7 @@ Provides a pattern registry loaded from a JSON file and a PHIRedactor class
 that scans text for 18 HIPAA identifier categories and applies configurable
 redaction modes.
 """
+
 from __future__ import annotations
 
 import json
@@ -157,23 +158,20 @@ class PHIRedactor:
         for name, info in self._patterns.items():
             pattern = info["pattern"]
             if not pattern:
-                logger.warning(
-                    "Skipping PHI pattern %r: empty pattern string", name
-                )
+                logger.warning("Skipping PHI pattern %r: empty pattern string", name)
                 continue
             try:
                 compiled = re.compile(pattern)
             except re.error:
-                logger.warning(
-                    "Skipping PHI pattern %r: invalid regex %r", name, pattern
-                )
+                logger.warning("Skipping PHI pattern %r: invalid regex %r", name, pattern)
                 continue
             if compiled.match("") is not None:
                 # Zero-width (e.g. "a*", "(?=foo)") — matches at every
                 # position; reject to avoid match floods / stalls.
                 logger.warning(
                     "Skipping PHI pattern %r: zero-width pattern %r",
-                    name, pattern,
+                    name,
+                    pattern,
                 )
                 continue
             self._compiled[name] = compiled
@@ -199,8 +197,7 @@ class PHIRedactor:
         def _check_deadline() -> None:
             if deadline is not None and _monotonic() >= deadline:
                 raise PHIScanTimeoutError(
-                    "PHI scan exceeded scan_timeout_ms="
-                    f"{self.config.scan_timeout_ms}"
+                    f"PHI scan exceeded scan_timeout_ms={self.config.scan_timeout_ms}"
                 )
 
         matches: list[PHIMatch] = []
@@ -241,17 +238,34 @@ class PHIRedactor:
             matched = m.group()
             # Skip if already matched by another named pattern
             already_matched = any(
-                not (m2.end <= m.start() or m2.start >= m.end())
-                for m2 in matches
+                not (m2.end <= m.start() or m2.start >= m.end()) for m2 in matches
             )
             if already_matched:
                 continue
             # Skip common false positives (month names, day-of-week, etc.)
             skip_words = {
-                "January", "February", "March", "April", "May", "June",
-                "July", "August", "September", "October", "November", "December",
-                "Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
-                "Saturday", "Sunday", "Today", "Yesterday", "Tomorrow",
+                "January",
+                "February",
+                "March",
+                "April",
+                "May",
+                "June",
+                "July",
+                "August",
+                "September",
+                "October",
+                "November",
+                "December",
+                "Monday",
+                "Tuesday",
+                "Wednesday",
+                "Thursday",
+                "Friday",
+                "Saturday",
+                "Sunday",
+                "Today",
+                "Yesterday",
+                "Tomorrow",
             }
             words = matched.split()
             if any(w in skip_words for w in words):
@@ -285,9 +299,7 @@ class PHIRedactor:
             self._stats["by_risk_level"][m.risk_level] = (
                 self._stats["by_risk_level"].get(m.risk_level, 0) + 1
             )
-            self._stats["total_matches"] = (
-                self._stats.get("total_matches", 0) + 1
-            )
+            self._stats["total_matches"] = self._stats.get("total_matches", 0) + 1
 
     # ── Redaction ──────────────────────────────────────────────────────────────
 
@@ -318,6 +330,7 @@ class PHIRedactor:
         """Determine the replacement string for a given mode."""
         if mode == "hash":
             import hashlib
+
             return hashlib.sha256(matched_text.encode()).hexdigest()[:12]
         elif mode == "truncate":
             return matched_text[:1] + "..." if len(matched_text) > 3 else "***"

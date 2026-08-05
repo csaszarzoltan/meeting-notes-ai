@@ -13,6 +13,7 @@ from meeting_notes_ai.hipaa.config import HIPAAConfig
 
 # ── Interface tests (should pass immediately) ──────────────────────────────
 
+
 class TestHIPAAConfigInterface:
     """Verify HIPAAConfig dataclass structure and defaults."""
 
@@ -167,6 +168,7 @@ class TestHIPAAConfigInterface:
 
 # ── Behavioral pre-tests (will fail with NotImplementedError until dev) ────
 
+
 class TestHIPAAConfigBehavioral:
     """Expected behaviors once HIPAAConfig is wired into services."""
 
@@ -208,6 +210,7 @@ class TestHIPAAConfigBehavioral:
         """HIPAAConfig should be accepted by LLMValidator."""
         try:
             from meeting_notes_ai.hipaa.llm_validator import LLMValidator
+
             LLMValidator(None, hipaa_config)
         except NotImplementedError:
             pytest.skip("RED phase — LLMValidator not implemented")

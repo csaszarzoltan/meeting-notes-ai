@@ -7,6 +7,7 @@ Implements a KMS-inspired envelope encryption model:
 - AES-256-GCM provides authenticated encryption (confidentiality + integrity)
 - Wrapped DEKs are persisted to ``key_store.json`` for restart survival (B4)
 """
+
 from __future__ import annotations
 
 import base64
@@ -168,7 +169,8 @@ class EncryptionService:
                 }
                 serialized = json.dumps(data, indent=2)
                 fd, tmp_name = tempfile.mkstemp(
-                    prefix="key_store.", suffix=".tmp",
+                    prefix="key_store.",
+                    suffix=".tmp",
                     dir=str(self._key_store_path.parent),
                 )
                 try:
@@ -188,8 +190,7 @@ class EncryptionService:
             self._store_error = None
         except Exception:
             logger.error(
-                "Failed to persist key store %s — wrapped DEKs may be "
-                "lost on restart",
+                "Failed to persist key store %s — wrapped DEKs may be lost on restart",
                 self._key_store_path,
                 exc_info=True,
             )
@@ -275,8 +276,7 @@ class EncryptionService:
                     return fp
                 except Exception:
                     logger.error(
-                        "Stored key for tenant %s cannot be unwrapped; "
-                        "refusing to overwrite it",
+                        "Stored key for tenant %s cannot be unwrapped; refusing to overwrite it",
                         tenant_id,
                         exc_info=True,
                     )
@@ -302,9 +302,7 @@ class EncryptionService:
         """Retrieve and unwrap the DEK for a tenant."""
         wrapped = self._key_store.get(tenant_id)
         if wrapped is None:
-            raise KeyNotFoundError(
-                f"No encryption key found for tenant: {tenant_id}"
-            )
+            raise KeyNotFoundError(f"No encryption key found for tenant: {tenant_id}")
         return self._unwrap_key(wrapped)
 
     # ── Field-level encryption ─────────────────────────────────────────────────
@@ -332,17 +330,13 @@ class EncryptionService:
             try:
                 return self._aes_decrypt(dek, ciphertext)
             except Exception as exc:
-                raise DecryptionError(
-                    f"Decryption failed for tenant {tenant_id}"
-                ) from exc
+                raise DecryptionError(f"Decryption failed for tenant {tenant_id}") from exc
 
         return await loop.run_in_executor(None, _dec)
 
     # ── Document-level encryption ──────────────────────────────────────────────
 
-    async def encrypt_document(
-        self, tenant_id: str, data: dict[str, Any]
-    ) -> dict[str, Any]:
+    async def encrypt_document(self, tenant_id: str, data: dict[str, Any]) -> dict[str, Any]:
         """Encrypt all PHI fields in a document dict. Returns encrypted dict."""
         loop = _get_loop()
 
@@ -353,9 +347,7 @@ class EncryptionService:
                 if isinstance(value, str):
                     result[key] = self._aes_encrypt(dek, value)
                 elif isinstance(value, dict):
-                    result[key] = self._aes_encrypt(
-                        dek, _sorted_json(value)
-                    )
+                    result[key] = self._aes_encrypt(dek, _sorted_json(value))
                 elif isinstance(value, (int, float)):
                     result[key] = value  # store non-string fields as-is
                 elif value is None:
@@ -366,9 +358,7 @@ class EncryptionService:
 
         return await loop.run_in_executor(None, _enc_doc)
 
-    async def decrypt_document(
-        self, tenant_id: str, data: dict[str, Any]
-    ) -> dict[str, Any]:
+    async def decrypt_document(self, tenant_id: str, data: dict[str, Any]) -> dict[str, Any]:
         """Decrypt all encrypted fields in a document dict. Returns plaintext."""
         loop = _get_loop()
 
@@ -397,9 +387,7 @@ class EncryptionService:
         loop = _get_loop()
 
         def _rotate() -> int:
-            new_kek = hashlib.sha256(
-                new_kek_secret.encode("utf-8")
-            ).digest()
+            new_kek = hashlib.sha256(new_kek_secret.encode("utf-8")).digest()
             count = 0
             for tenant_id in list(self._key_store.keys()):
                 dek = self._unwrap_key(self._key_store[tenant_id])
@@ -422,9 +410,7 @@ class EncryptionService:
 
         def _info() -> KeyInfo:
             if tenant_id not in self._key_meta:
-                raise KeyNotFoundError(
-                    f"No key found for tenant: {tenant_id}"
-                )
+                raise KeyNotFoundError(f"No key found for tenant: {tenant_id}")
             return self._key_meta[tenant_id]
 
         return await loop.run_in_executor(None, _info)
@@ -449,6 +435,7 @@ class EncryptionService:
 def _get_loop():
     """Get the currently running event loop."""
     import asyncio
+
     return asyncio.get_running_loop()
 
 
@@ -460,12 +447,14 @@ def _fingerprint(key_bytes: bytes) -> str:
 def _now_iso() -> str:
     """Return current UTC time as ISO string."""
     from datetime import datetime, timezone
+
     return datetime.now(timezone.utc).isoformat()
 
 
 def _sorted_json(data: dict[str, Any]) -> str:
     """JSON-serialize a dict with sorted keys."""
     import json
+
     return json.dumps(data, sort_keys=True)
 
 

@@ -10,6 +10,7 @@ Modules under test:
 
 from __future__ import annotations
 
+import asyncio
 from inspect import signature
 
 import pytest
@@ -135,9 +136,7 @@ class TestApiKeyModel:
         from meeting_notes_ai.db.models import ApiKey
 
         col = ApiKey.__table__.columns["is_active"]
-        assert col.default is True or (
-            hasattr(col.default, "arg") and col.default.arg is True
-        )
+        assert col.default is True or (hasattr(col.default, "arg") and col.default.arg is True)
 
     def test_api_key_name_is_nullable(self):
         """ApiKey.name is nullable (user-friendly label, optional)."""
@@ -379,7 +378,7 @@ class TestApiKeyBehavioral:
         """Return a valid JWT token for testing."""
         from meeting_notes_ai.auth import create_access_token
 
-        return create_access_token("test-user-id")
+        return asyncio.run(create_access_token("test-user-id"))
 
     # ── POST /api/v1/api-keys ─────────────────────────────────────────────
 
@@ -550,9 +549,7 @@ class TestApiKeyBehavioral:
         # The deleted key should either be absent or have is_active=False
         for k in keys:
             if k.get("id") == key_data["id"]:
-                assert k.get("is_active") is False, (
-                    "Deleted key should have is_active=False"
-                )
+                assert k.get("is_active") is False, "Deleted key should have is_active=False"
 
     @pytest.mark.xfail(strict=True, reason="Not yet implemented — RED phase")
     def test_delete_api_key_not_found(self, client, valid_token):
@@ -561,16 +558,14 @@ class TestApiKeyBehavioral:
             "/api/v1/api-keys/non-existent-key-id",
             headers={"Authorization": f"Bearer {valid_token}"},
         )
-        assert response.status_code == 404, (
-            f"Expected 404, got {response.status_code}"
-        )
+        assert response.status_code == 404, f"Expected 404, got {response.status_code}"
 
     @pytest.mark.xfail(strict=True, reason="Not yet implemented — RED phase")
     def test_delete_api_key_forbidden_not_owner(self, client):
         """DELETE /api-keys/{id} by another user returns 403."""
         from meeting_notes_ai.auth import create_access_token
 
-        other_token = create_access_token("other-user-id")
+        other_token = asyncio.run(create_access_token("other-user-id"))
         response = client.delete(
             "/api/v1/api-keys/other-users-key",
             headers={"Authorization": f"Bearer {other_token}"},

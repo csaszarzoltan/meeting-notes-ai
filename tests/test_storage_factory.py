@@ -75,9 +75,7 @@ class TestStorageFactoryBehavioral:
         # Also patch the Settings singleton if it exposes the field.
         from meeting_notes_ai import config
 
-        monkeypatch.setattr(
-            config.settings, "storage_backend", value, raising=False
-        )
+        monkeypatch.setattr(config.settings, "storage_backend", value, raising=False)
 
     def test_default_is_local(self, monkeypatch):
         self._set_backend(monkeypatch, None)

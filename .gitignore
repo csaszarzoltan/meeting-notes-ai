@@ -16,3 +16,6 @@ frontend/vite.config.d.ts
 frontend/dist/
 build/
 *.log
+meeting_notes.db
+data/workspace_state.json
+data/*.tmp

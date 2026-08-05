@@ -289,7 +289,6 @@ async def test_decode_access_token_valid():
 @pytest.mark.asyncio
 async def test_decode_access_token_invalid():
     """decode_access_token raises HTTPException for invalid token."""
-    from jose import JWTError
 
     from meeting_notes_ai.auth import decode_access_token
 

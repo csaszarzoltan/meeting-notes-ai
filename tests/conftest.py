@@ -463,8 +463,6 @@ def _make_stored_file(_setup_test_db, tmp_path, team_meeting: bool):
         reason="implementation pending: meeting_notes_ai/storage/local.py",
     )
     try:
-        from meeting_notes_ai.storage.local import LocalStorageBackend
-
         from meeting_notes_ai.db.models import (
             Meeting,
             StorageEncryption,
@@ -472,6 +470,7 @@ def _make_stored_file(_setup_test_db, tmp_path, team_meeting: bool):
             StoredFile,
         )
         from meeting_notes_ai.db.session import get_db_session
+        from meeting_notes_ai.storage.local import LocalStorageBackend
     except (ImportError, AttributeError) as exc:  # pragma: no cover - pre-impl
         pytest.skip(f"implementation pending: StoredFile model ({exc})")
 

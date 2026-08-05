@@ -336,22 +336,22 @@ async def export_batch(
     meeting_data = []
     for fr in file_results:
         if fr.meeting_id and fr.status == BatchStatus.COMPLETED:
-            meeting_result = await db.execute(
-                select(Meeting).where(Meeting.id == fr.meeting_id)
-            )
+            meeting_result = await db.execute(select(Meeting).where(Meeting.id == fr.meeting_id))
             meeting = meeting_result.scalar_one_or_none()
             if meeting:
-                meeting_data.append({
-                    "id": meeting.id,
-                    "title": meeting.title,
-                    "filename": meeting.filename,
-                    "mode": meeting.mode,
-                    "transcript": meeting.transcript,
-                    "summary": fr.transcript_summary or "",
-                    "action_items": meeting.action_items,
-                    "decisions": meeting.decisions,
-                    "key_points": meeting.key_points,
-                })
+                meeting_data.append(
+                    {
+                        "id": meeting.id,
+                        "title": meeting.title,
+                        "filename": meeting.filename,
+                        "mode": meeting.mode,
+                        "transcript": meeting.transcript,
+                        "summary": fr.transcript_summary or "",
+                        "action_items": meeting.action_items,
+                        "decisions": meeting.decisions,
+                        "key_points": meeting.key_points,
+                    }
+                )
 
     export_service = ExportService()
 

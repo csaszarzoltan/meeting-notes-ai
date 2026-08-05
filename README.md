@@ -2,6 +2,20 @@
 
 MeetingNotesAI is a privacy-first meeting workspace that turns live or uploaded conversations into **verified notes and completed work**. The v0.9 interface unifies recording, meeting history, evidence-linked review, actions, sharing, teams, compliance, integrations, and settings in one responsive React application.
 
+## v1.0.1 verified workspace integration
+
+The priority GUI screens now use the persistent `/api/v1/workspace/*` service rather than in-component demo arrays. Meeting review stores edits, approval/rejection, versions, and audit events. Actions, settings, connector state, compliance findings, batch retries, cited insights, and approved-meeting shares survive reloads through atomic local state in `data/workspace_state.json`.
+
+Connector synchronization currently uses the built-in adapter boundary and durable external references. Production Microsoft Planner, Jira, Asana, Linear, Salesforce, and Slack OAuth credentials must be supplied by deployment-specific adapters. The UI does not claim vendor-side completion until such an adapter is configured.
+
+For optional MinIO verification, start the dev service and run:
+
+```bash
+RUN_S3_INTEGRATION=1 uv run pytest -q tests/test_storage_s3_integration.py
+```
+
+The default full suite skips that external-service test module and remains deterministic.
+
 ## v1.0 complete meeting workflow GUI
 
 The product now implements the full **prepare → capture → process → review → approve → execute → share → retrieve** experience. New in v1.0: guided capture setup, a three-column live workspace, an eight-stage processing timeline, Action Center, Safe Sharing recipient preview, cited cross-meeting Insights, issue-first Compliance Center, batch recovery, integrations, governed settings, and mobile bottom navigation. These surfaces directly address the validated demand for outcome-first notes, visible privacy, source evidence, and action execution.

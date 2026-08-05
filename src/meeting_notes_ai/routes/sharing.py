@@ -198,9 +198,7 @@ async def create_share_link(
     db: AsyncSession = Depends(get_db_session),
 ) -> ShareResponse:
     """Generate a share link for a meeting."""
-    meeting = await _verify_meeting_access(
-        meeting_id, user, db, require_write=True
-    )
+    meeting = await _verify_meeting_access(meeting_id, user, db, require_write=True)
 
     token = secrets.token_urlsafe(32)
     expires_at = _compute_expires_at(request.expires_in)

@@ -107,7 +107,9 @@ class TestAppV2Interface:
     def test_webhook_create_route_available(self):
         """POST /api/v1/webhooks should be registered."""
         for r in _collect_routes(app):
-            if r.path.rstrip("/") == "/api/v1/webhooks" and "POST" in (getattr(r, "methods", set())):
+            if r.path.rstrip("/") == "/api/v1/webhooks" and "POST" in (
+                getattr(r, "methods", set())
+            ):
                 return
         pytest.fail("POST /api/v1/webhooks not found")
 

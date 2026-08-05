@@ -206,9 +206,7 @@ class LiveTranscriptionService:
         # Incremental STT: transcribe the session's accumulated audio and
         # emit the next monotonic partial.
         audio = self._assemble_audio(session)
-        result = await self.transcription_service.transcribe(
-            audio, self._filename_for(session)
-        )
+        result = await self.transcription_service.transcribe(audio, self._filename_for(session))
         partial = LivePartial(
             sequence=len(session.partials) + 1,
             text=result.text,
@@ -252,9 +250,7 @@ class LiveTranscriptionService:
         result = await self.transcription_service.transcribe(
             audio, self._filename_for(session), language
         )
-        extraction = await self.extraction_service.extract(
-            result.text, mode=MeetingMode.GENERAL
-        )
+        extraction = await self.extraction_service.extract(result.text, mode=MeetingMode.GENERAL)
         await self._persist_meeting(
             meeting_id=session.meeting_id,
             user_id=session.user_id,
@@ -355,18 +351,14 @@ class LiveTranscriptionService:
         row.room_id = session.room_id
         row.status = session.status.value
         row.chunks_json = json.dumps([_chunk_to_json(c) for c in session.chunks])
-        row.partials_json = json.dumps(
-            [p.model_dump(mode="json") for p in session.partials]
-        )
+        row.partials_json = json.dumps([p.model_dump(mode="json") for p in session.partials])
         row.retention_days = session.retention_days
         row.hipaa = session.hipaa
         row.phi_classification = session.phi_classification
 
     def _row_to_session(self, row: LiveSessionRecord) -> LiveSession:
         chunks = [_chunk_from_json(c) for c in json.loads(row.chunks_json or "[]")]
-        partials = [
-            LivePartial.model_validate(p) for p in json.loads(row.partials_json or "[]")
-        ]
+        partials = [LivePartial.model_validate(p) for p in json.loads(row.partials_json or "[]")]
         return LiveSession(
             id=row.id,
             meeting_id=row.meeting_id,

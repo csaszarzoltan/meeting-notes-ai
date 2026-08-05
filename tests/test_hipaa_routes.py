@@ -83,12 +83,8 @@ class FakeTranscriber:
             language=language or "en",
             duration_seconds=1.5,
             segments=[
-                TranscriptSegment(
-                    start=0.0, end=1.0, text="Patient John Smith called"
-                ),
-                TranscriptSegment(
-                    start=1.0, end=1.5, text="with SSN 123-45-6789."
-                ),
+                TranscriptSegment(start=0.0, end=1.0, text="Patient John Smith called"),
+                TranscriptSegment(start=1.0, end=1.5, text="with SSN 123-45-6789."),
             ],
         )
 
@@ -204,9 +200,7 @@ class TestTranscribe:
         segment_texts = [s.get("text", "") for s in data["segments"]]
         assert segment_texts, "expected segments in response"
         for seg_text in segment_texts:
-            assert "123-45-6789" not in seg_text, (
-                f"SSN leaked through segment text: {seg_text!r}"
-            )
+            assert "123-45-6789" not in seg_text, f"SSN leaked through segment text: {seg_text!r}"
             assert "John Smith" not in seg_text, (
                 f"patient name leaked through segment text: {seg_text!r}"
             )
@@ -215,9 +209,7 @@ class TestTranscribe:
         from meeting_notes_ai.routes.hipaa import get_transcription_service
 
         text = "Patient John Smith called with SSN 123-45-6789."
-        app.dependency_overrides[get_transcription_service] = lambda: FakeTranscriber(
-            text
-        )
+        app.dependency_overrides[get_transcription_service] = lambda: FakeTranscriber(text)
         resp = client.post(
             "/api/v1/transcribe",
             files={"file": ("meeting.wav", b"RIFFdata", "audio/wav")},
@@ -268,9 +260,7 @@ class TestAuditLogs:
         # Most recent first
         assert data[0]["actor"] == "user-7"
 
-        resp = client.get(
-            "/api/v1/audit-logs?actor=user-42", headers=auth_headers
-        )
+        resp = client.get("/api/v1/audit-logs?actor=user-42", headers=auth_headers)
         data = resp.json()
         assert len(data) == 1
         assert data[0]["action"] == "phi.redact"
@@ -326,9 +316,7 @@ class TestRealMiddlewareWiring:
     audit-logs endpoint would never see entries written by other requests.
     """
 
-    async def test_audit_entries_persist_across_requests(
-        self, client_real, auth_headers
-    ):
+    async def test_audit_entries_persist_across_requests(self, client_real, auth_headers):
         from meeting_notes_ai.routes.hipaa import get_transcription_service
 
         app.dependency_overrides[get_transcription_service] = lambda: FakeTranscriber(
@@ -376,9 +364,7 @@ class TestRotateKey:
         assert data["re_wrapped_keys"] == 1
         assert data["rotated_at"]
 
-    async def test_rotate_key_rejects_empty_secret(
-        self, client, auth_headers, monkeypatch
-    ):
+    async def test_rotate_key_rejects_empty_secret(self, client, auth_headers, monkeypatch):
         monkeypatch.setenv("HIPAA_MASTER_KEY", "apitest-master-key")
         resp = client.post(
             "/api/v1/encryption/rotate-key",
@@ -438,9 +424,7 @@ class TestComplianceDashboard:
         assert isinstance(data["activity"], list)
 
     async def test_dashboard_summary(self, client, auth_headers):
-        resp = client.get(
-            "/api/v1/compliance/dashboard/summary", headers=auth_headers
-        )
+        resp = client.get("/api/v1/compliance/dashboard/summary", headers=auth_headers)
         assert resp.status_code == 200, resp.text
         summary = resp.json()
         for key in (
@@ -455,9 +439,7 @@ class TestComplianceDashboard:
             assert key in summary, f"summary missing '{key}'"
 
     async def test_dashboard_phi_stats(self, client, auth_headers):
-        resp = client.get(
-            "/api/v1/compliance/dashboard/phi-stats", headers=auth_headers
-        )
+        resp = client.get("/api/v1/compliance/dashboard/phi-stats", headers=auth_headers)
         assert resp.status_code == 200, resp.text
         stats = resp.json()
         assert "by_category" in stats

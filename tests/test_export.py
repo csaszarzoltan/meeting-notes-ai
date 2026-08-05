@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from inspect import signature
 
+import pytest
+
 from meeting_notes_ai.models import (
     ExportFormat,
     MeetingMode,
 )
 from meeting_notes_ai.services.export import ExportService
-import pytest
 
 # Mark as quick (unit tests)
 pytestmark = pytest.mark.quick
@@ -106,9 +107,7 @@ class TestExportServiceBehavioral:
     def test_export_json_returns_valid_json(self):
         """Calling export_json should return JSON string."""
         service = ExportService()
-        result = service.export_json(
-            result={"summary": "test", "action_items": []}
-        )
+        result = service.export_json(result={"summary": "test", "action_items": []})
         import json
 
         parsed = json.loads(result)
@@ -117,9 +116,7 @@ class TestExportServiceBehavioral:
     def test_export_json_with_pretty_false(self):
         """Calling export_json with pretty=False should be compact."""
         service = ExportService()
-        result = service.export_json(
-            result={"summary": "test"}, pretty=False
-        )
+        result = service.export_json(result={"summary": "test"}, pretty=False)
         # Compact JSON has no whitespace
         assert "\n" not in result
 
@@ -129,9 +126,7 @@ class TestExportServiceBehavioral:
         result = service.export_markdown(
             result={
                 "summary": "Q3 planning",
-                "action_items": [
-                    {"assignee": "Mike", "description": "API work"}
-                ],
+                "action_items": [{"assignee": "Mike", "description": "API work"}],
                 "decisions": ["Release Oct 1"],
                 "key_points": ["Focus on API"],
             },
@@ -166,12 +161,8 @@ class TestExportServiceBehavioral:
         result = service.export_markdown(
             result={
                 "summary": "Deposition",
-                "key_testimony": [
-                    {"witness": "John Doe", "excerpt": "I saw the accident"}
-                ],
-                "objections": [
-                    {"type": "hearsay", "context": "Second-hand account"}
-                ],
+                "key_testimony": [{"witness": "John Doe", "excerpt": "I saw the accident"}],
+                "objections": [{"type": "hearsay", "context": "Second-hand account"}],
             },
             mode=MeetingMode.LEGAL,
         )

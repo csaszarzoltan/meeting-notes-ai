@@ -107,9 +107,7 @@ class BAAService:
             try:
                 store_path = db_factory()
             except Exception:
-                logger.exception(
-                    "db_factory() failed — falling back to in-memory store"
-                )
+                logger.exception("db_factory() failed — falling back to in-memory store")
                 store_path = None
         if store_path is not None:
             self._store_path = Path(store_path)
@@ -211,10 +209,11 @@ class BAAService:
         pdf.set_font("Helvetica", "B", 12)
         pdf.cell(0, 8, "Parties", new_x="LMARGIN", new_y="NEXT")
         pdf.set_font("Helvetica", "", 11)
-        pdf.multi_cell(0, 6, (
-            f"Covered Entity: {agreement.org_name}\n"
-            f"Business Associate: {agreement.ba_name}\n"
-        ))
+        pdf.multi_cell(
+            0,
+            6,
+            (f"Covered Entity: {agreement.org_name}\nBusiness Associate: {agreement.ba_name}\n"),
+        )
         pdf.ln(3)
 
         # Agreement content (extract text from markdown, adding sections)
@@ -268,9 +267,7 @@ class BAAService:
             return
         try:
             with self._lock:
-                data = json.loads(
-                    self._store_path.read_text(encoding="utf-8")
-                )
+                data = json.loads(self._store_path.read_text(encoding="utf-8"))
                 for ag_id, item in data.get("agreements", {}).items():
                     self._agreements[ag_id] = BAAgreement(
                         id=item.get("id", ag_id),
@@ -283,8 +280,7 @@ class BAAService:
                     )
         except Exception:
             logger.error(
-                "Failed to load BAA store %s — starting with empty "
-                "agreement registry",
+                "Failed to load BAA store %s — starting with empty agreement registry",
                 self._store_path,
                 exc_info=True,
             )
@@ -317,7 +313,8 @@ class BAAService:
                 }
                 serialized = json.dumps(data, indent=2)
                 fd, tmp_name = tempfile.mkstemp(
-                    prefix="baa_store.", suffix=".tmp",
+                    prefix="baa_store.",
+                    suffix=".tmp",
                     dir=str(self._store_path.parent),
                 )
                 try:
@@ -335,8 +332,7 @@ class BAAService:
                     raise
         except Exception:
             logger.error(
-                "Failed to persist BAA store %s — agreements may be "
-                "lost on restart",
+                "Failed to persist BAA store %s — agreements may be lost on restart",
                 self._store_path,
                 exc_info=True,
             )

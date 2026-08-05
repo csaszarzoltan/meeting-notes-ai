@@ -1,13 +1,14 @@
 import { useRef, useState } from 'react';
 import type { MeetingResult } from './types';
 import { ProcessingTimeline } from './ProcessingTimeline';
+import { workspaceRequest } from '../api/workspace';
 
 /** Real upload-to-review flow backed by POST /api/v1/meetings. */
 export function UploadFlow({ onComplete }: { onComplete: (result: MeetingResult) => void }) {
   const [mode, setMode] = useState('general'); const [file, setFile] = useState<File | null>(null); const [consent, setConsent] = useState(false); const [error, setError] = useState(''); const [stage, setStage] = useState(0); const input = useRef<HTMLInputElement>(null);
   const submit = async () => { setError(''); if (!file) { setError('Choose a recording to continue.'); return; } if (file.size === 0) { setError('This recording is empty. Choose another file.'); return; } if (file.size > 25 * 1024 * 1024) { setError('This file is over 25 MB. Compress it or choose a smaller recording.'); return; } if (mode === 'healthcare' && !consent) { setError('Confirm recording consent before processing a Healthcare meeting.'); return; }
     const form = new FormData(); form.set('file', file); form.set('mode', mode); form.set('consent_confirmed', String(consent)); form.set('phi_redaction', String(mode === 'healthcare')); setStage(1);
-    try { const response = await fetch('/api/v1/meetings', { method: 'POST', body: form }); setStage(2); const body = await response.json() as MeetingResult & { detail?: string | { message?: string } }; if (!response.ok) throw new Error(typeof body.detail === 'string' ? body.detail : body.detail?.message ?? 'We could not process this recording.'); setStage(3); onComplete(body); } catch (reason) { setStage(0); setError(reason instanceof Error ? reason.message : 'Something went wrong. Please retry.'); }
+    try { const response = await fetch('/api/v1/meetings', { method: 'POST', body: form }); setStage(2); const body = await response.json() as MeetingResult & { detail?: string | { message?: string } }; if (!response.ok) throw new Error(typeof body.detail === 'string' ? body.detail : body.detail?.message ?? 'We could not process this recording.'); const saved = await workspaceRequest<MeetingResult>('/meetings', { method: 'POST', body: JSON.stringify({ ...body, title: file.name }) }); setStage(3); onComplete(saved); } catch (reason) { setStage(0); setError(reason instanceof Error ? reason.message : 'Something went wrong. Please retry.'); }
   };
   return <section className="upload-page" aria-labelledby="upload-title"><div className="page-heading centered"><div><span className="eyebrow">Private by design</span><h2 id="upload-title">Turn a conversation into verified work</h2><p>Upload one recording. We will create a reviewable transcript, decisions, and actions.</p></div></div>
     <div className="capture-switch" role="tablist" aria-label="Capture method"><button role="tab" aria-selected="true">↑ Upload</button><button role="tab">● Record live</button><button role="tab">◇ Import calendar</button></div>

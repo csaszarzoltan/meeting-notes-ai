@@ -40,7 +40,6 @@ class TestExportInterface:
         assert "mode" in params
 
     def test_export_pdf_returns_bytes(self):
-        from meeting_notes_ai.models import MeetingMode
         from meeting_notes_ai.services.export import ExportService
 
         sig = signature(ExportService.export_pdf)
@@ -117,8 +116,8 @@ class TestExportBehavioral:
             modes=[MeetingMode.GENERAL],
         )
 
-        import zipfile
         import io
+        import zipfile
 
         with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
             names = zf.namelist()
@@ -139,8 +138,8 @@ class TestExportBehavioral:
             formats=["json"],
         )
 
-        import zipfile
         import io
+        import zipfile
 
         with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
             names = zf.namelist()

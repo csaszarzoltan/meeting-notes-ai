@@ -161,9 +161,7 @@ class TestExtractionServiceBehavioral:
         mock_response.choices = [mock_choice]
 
         mock_client = AsyncMock()
-        mock_client.chat.completions.create = AsyncMock(
-            return_value=mock_response
-        )
+        mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
 
         with patch.object(service, "_get_client", return_value=mock_client):
             result = await service.extract(sample_transcript)
@@ -184,14 +182,10 @@ class TestExtractionServiceBehavioral:
         mock_response.choices = [mock_choice]
 
         mock_client = AsyncMock()
-        mock_client.chat.completions.create = AsyncMock(
-            return_value=mock_response
-        )
+        mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
 
         with patch.object(service, "_get_client", return_value=mock_client):
-            result = await service.extract(
-                sample_transcript, mode=MeetingMode.HEALTHCARE
-            )
+            result = await service.extract(sample_transcript, mode=MeetingMode.HEALTHCARE)
 
         assert "headache" in result.key_points[0]
 
@@ -209,14 +203,10 @@ class TestExtractionServiceBehavioral:
         mock_response.choices = [mock_choice]
 
         mock_client = AsyncMock()
-        mock_client.chat.completions.create = AsyncMock(
-            return_value=mock_response
-        )
+        mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
 
         with patch.object(service, "_get_client", return_value=mock_client):
-            result = await service.extract(
-                sample_transcript, mode=MeetingMode.LEGAL
-            )
+            result = await service.extract(sample_transcript, mode=MeetingMode.LEGAL)
 
         assert "Objection" in result.decisions[0]
 
@@ -233,9 +223,7 @@ class TestExtractionServiceBehavioral:
         mock_response.choices = [mock_choice]
 
         mock_client = AsyncMock()
-        mock_client.chat.completions.create = AsyncMock(
-            return_value=mock_response
-        )
+        mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
 
         with patch.object(service, "_get_client", return_value=mock_client):
             result = await service.extract(empty_transcript)
@@ -246,9 +234,7 @@ class TestExtractionServiceBehavioral:
     async def test_build_prompt_returns_string(self, sample_transcript):
         """_build_prompt should return a string."""
         service = ExtractionService.__new__(ExtractionService)
-        prompt = await service._build_prompt(
-            sample_transcript, MeetingMode.GENERAL
-        )
+        prompt = await service._build_prompt(sample_transcript, MeetingMode.GENERAL)
         assert isinstance(prompt, str)
         assert len(prompt) > 10
 

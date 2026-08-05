@@ -200,8 +200,6 @@ def _seed_sweep_rows(tmp_path, expired_count: int, live_count: int):
     engine's session factory for the sweep so the rows are visible (an
     in-memory SQLite DB lives per-engine, not per-process).
     """
-    from meeting_notes_ai.storage.local import LocalStorageBackend
-
     from meeting_notes_ai.db.engine import (
         create_db_engine,
         create_session_factory,
@@ -214,6 +212,7 @@ def _seed_sweep_rows(tmp_path, expired_count: int, live_count: int):
         StoredFile,
         User,
     )
+    from meeting_notes_ai.storage.local import LocalStorageBackend
 
     backend = LocalStorageBackend(str(tmp_path / "storage"))
     now = datetime.now(timezone.utc)
@@ -340,9 +339,7 @@ class TestRetentionEndpoints:
         from meeting_notes_ai.config import settings
         from meeting_notes_ai.main import app
 
-        monkeypatch.setattr(
-            settings, "storage_local_dir", str(tmp_path / "storage"), raising=False
-        )
+        monkeypatch.setattr(settings, "storage_local_dir", str(tmp_path / "storage"), raising=False)
         return TestClient(app)
 
     def test_put_retention_requires_admin(self, client):

@@ -1,4 +1,5 @@
 """Healthcare mode — SOAP note formatting with HIPAA markers."""
+
 from __future__ import annotations
 
 from meeting_notes_ai.models import (
@@ -85,16 +86,13 @@ def _extract_plan(result: ExtractionResult) -> str:
     """Extract treatment plan from action items."""
     if result.action_items:
         plans = [
-            f"{item.assignee or 'Provider'}: {item.description}"
-            for item in result.action_items
+            f"{item.assignee or 'Provider'}: {item.description}" for item in result.action_items
         ]
         return "\n".join(plans)
     return ""
 
 
-def _generate_hipaa_markers(
-    result: ExtractionResult, patient_id: str | None
-) -> list[HIPAAMarker]:
+def _generate_hipaa_markers(result: ExtractionResult, patient_id: str | None) -> list[HIPAAMarker]:
     """Generate HIPAA compliance markers based on extracted content."""
     markers: list[HIPAAMarker] = []
 

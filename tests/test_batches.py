@@ -159,9 +159,8 @@ class TestBatchBehavioral:
 
     def test_batch_create_response_defaults(self):
         """BatchCreateResponse has correct defaults."""
-        from meeting_notes_ai.routes.batches import BatchCreateResponse
-
         from meeting_notes_ai.db.models import BatchStatus
+        from meeting_notes_ai.routes.batches import BatchCreateResponse
 
         resp = BatchCreateResponse(
             batch_id="b-1",
@@ -174,9 +173,8 @@ class TestBatchBehavioral:
 
     def test_batch_status_response_defaults(self):
         """BatchStatusResponse has correct defaults."""
-        from meeting_notes_ai.routes.batches import BatchStatusResponse
-
         from meeting_notes_ai.db.models import BatchStatus
+        from meeting_notes_ai.routes.batches import BatchStatusResponse
 
         resp = BatchStatusResponse(
             batch_id="b-1",
@@ -188,9 +186,8 @@ class TestBatchBehavioral:
 
     def test_batch_file_result_summary_defaults(self):
         """BatchFileResultSummary has correct types."""
-        from meeting_notes_ai.routes.batches import BatchFileResultSummary
-
         from meeting_notes_ai.db.models import BatchStatus
+        from meeting_notes_ai.routes.batches import BatchFileResultSummary
 
         summary = BatchFileResultSummary(filename="test.mp3", status=BatchStatus.PENDING)
         assert summary.filename == "test.mp3"

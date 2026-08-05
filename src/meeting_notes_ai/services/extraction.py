@@ -1,4 +1,5 @@
 """LLM extraction service — structured data from transcripts."""
+
 from __future__ import annotations
 
 import json
@@ -12,9 +13,7 @@ from meeting_notes_ai.models import ActionItem, ExtractionResult, MeetingMode
 class ExtractionService:
     """Extract structured action items, decisions, key points from transcript."""
 
-    def __init__(
-        self, provider: str, model: str = "gpt-4o", api_key: str | None = None
-    ) -> None:
+    def __init__(self, provider: str, model: str = "gpt-4o", api_key: str | None = None) -> None:
         self.provider = provider
         self.model = model
         self.api_key = api_key

@@ -59,7 +59,7 @@ def test_review_workspace_links_evidence_and_requires_approval() -> None:
     source = (FRONTEND / "workspace/ReviewWorkspace.tsx").read_text()
     assert "Source evidence" in source
     assert "Approve notes" in source
-    assert "Needs review" in source
+    assert "review_status" in source
     assert "audio" in source
     assert "timestamp" in source.lower()
 

@@ -32,9 +32,7 @@ class _FakeTranscription:
             text="hello from the live ui",
             language=language or "en",
             duration_seconds=1.0,
-            segments=[
-                TranscriptSegment(start=0.0, end=1.0, text="hello from the live ui")
-            ],
+            segments=[TranscriptSegment(start=0.0, end=1.0, text="hello from the live ui")],
         )
 
 

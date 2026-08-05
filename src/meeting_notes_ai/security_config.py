@@ -49,13 +49,15 @@ def validate_storage_settings(settings: Settings) -> None:
                 "STORAGE_ENCRYPTION=aes256gcm requires STORAGE_ENCRYPTION_KEY "
                 "(or HIPAA_MASTER_KEY) — refusing to store files in plaintext"
             )
-    if settings.environment.lower() == "production" and (
-        settings.storage_encryption or "none"
-    ) != "aes256gcm":
+    if (
+        settings.environment.lower() == "production"
+        and (settings.storage_encryption or "none") != "aes256gcm"
+    ):
         logger.warning(
             "HIPAA deployments must set STORAGE_ENCRYPTION=aes256gcm — "
             "stored audio/transcripts are NOT encrypted at rest"
         )
+
 
 def _env(name: str) -> str:
     import os

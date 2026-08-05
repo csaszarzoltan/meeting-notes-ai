@@ -1,7 +1,7 @@
 {
   "name": "meeting-notes-ai-workspace",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.2",
   "type": "module",
   "description": "Unified MeetingNotesAI product workspace built with React and TypeScript.",
   "scripts": {

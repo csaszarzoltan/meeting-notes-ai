@@ -76,10 +76,6 @@ class TestWebhooksInterface:
 
     def test_webhook_service_importable(self):
         from meeting_notes_ai.services.webhooks import (
-            WebhookDeliveryResult,
-            WebhookEvent,
-            WebhookSubscriptionCreate,
-            WebhookSubscriptionResponse,
             delete_webhook,
             fire_batch_completed_webhooks,
             fire_webhook,

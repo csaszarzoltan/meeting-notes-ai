@@ -156,7 +156,14 @@ class TestTeamsInterface:
             remove_member,
         )
 
-        for handler in [create_team, list_teams, get_team, invite_member, change_member_role, remove_member]:
+        for handler in [
+            create_team,
+            list_teams,
+            get_team,
+            invite_member,
+            change_member_role,
+            remove_member,
+        ]:
             assert inspect.iscoroutinefunction(handler), f"{handler.__name__} is not async"
 
     def test_create_team_accepts_user_depends(self):
@@ -198,7 +205,6 @@ class TestTeamsBehavioral:
     def test_member_response_construct(self):
         """MemberResponse constructs correctly."""
         from meeting_notes_ai.db.models import TeamRole
-
         from meeting_notes_ai.routes.teams import MemberResponse
 
         resp = MemberResponse(

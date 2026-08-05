@@ -49,7 +49,6 @@ from meeting_notes_ai.routes.sharing import _verify_meeting_access
 from meeting_notes_ai.storage.encryption import FileEncryptor
 from meeting_notes_ai.storage.factory import get_storage_backend
 from meeting_notes_ai.storage.retention import (
-    DEFAULT_RETENTION_DAYS,
     ALLOWED_RETENTION_DAYS,
     RetentionPolicy,
     sweep_expired,
@@ -201,7 +200,9 @@ def _stored_to_response(row: StoredFile) -> StoredFileResponse:
         size_bytes=row.size_bytes,
         sha256=row.sha256,
         content_type=row.content_type,
-        encryption=row.encryption.value if hasattr(row.encryption, "value") else str(row.encryption),
+        encryption=row.encryption.value
+        if hasattr(row.encryption, "value")
+        else str(row.encryption),
         expires_at=row.expires_at,
         created_at=row.created_at,
     )
@@ -351,9 +352,7 @@ async def download_audio(
     return Response(
         content=data,
         media_type=row.content_type,
-        headers={
-            "Content-Disposition": f'attachment; filename="audio-{meeting_id}.wav"'
-        },
+        headers={"Content-Disposition": f'attachment; filename="audio-{meeting_id}.wav"'},
     )
 
 
@@ -441,9 +440,7 @@ async def download_transcript(
     return Response(
         content=data,
         media_type=media_type,
-        headers={
-            "Content-Disposition": f'attachment; filename="transcript-{meeting_id}.txt"'
-        },
+        headers={"Content-Disposition": f'attachment; filename="transcript-{meeting_id}.txt"'},
     )
 
 
@@ -617,9 +614,7 @@ async def get_team_retention(
     return RetentionResponse(
         retention_days=team.retention_days,
         effective_days=policy.effective_days(),
-        expires_at_example=policy.compute_expires_at(
-            datetime.now(timezone.utc)
-        ).isoformat(),
+        expires_at_example=policy.compute_expires_at(datetime.now(timezone.utc)).isoformat(),
     )
 
 

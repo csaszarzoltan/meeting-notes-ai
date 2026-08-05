@@ -302,12 +302,8 @@ class StoredFile(Base, TimestampMixin):
     team_id: Mapped[Optional[str]] = mapped_column(
         String(36), ForeignKey("teams.id"), nullable=True, index=True
     )
-    uploaded_by: Mapped[str] = mapped_column(
-        String(36), ForeignKey("users.id"), nullable=False
-    )
-    kind: Mapped[StorageFileKind] = mapped_column(
-        Enum(StorageFileKind), nullable=False
-    )
+    uploaded_by: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False)
+    kind: Mapped[StorageFileKind] = mapped_column(Enum(StorageFileKind), nullable=False)
     object_key: Mapped[str] = mapped_column(String(500), nullable=False)
     bucket: Mapped[str] = mapped_column(String(200), nullable=False)
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)

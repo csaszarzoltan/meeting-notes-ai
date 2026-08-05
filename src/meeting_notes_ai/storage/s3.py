@@ -16,7 +16,8 @@ from typing import Any
 import botocore.config
 from botocore.exceptions import ClientError
 
-from meeting_notes_ai.config import Settings, settings as default_settings
+from meeting_notes_ai.config import Settings
+from meeting_notes_ai.config import settings as default_settings
 
 
 class S3StorageBackend:

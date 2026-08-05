@@ -132,9 +132,7 @@ class TestTranscriptionServiceBehavioral:
         assert service.model == "whisper-1"
 
     @pytest.mark.asyncio
-    async def test_transcribe_calls_openai(
-        self, sample_audio_bytes, sample_filename
-    ):
+    async def test_transcribe_calls_openai(self, sample_audio_bytes, sample_filename):
         """Calling transcribe should use OpenAI client."""
         service = TranscriptionService(api_key="test-key")
 
@@ -149,14 +147,10 @@ class TestTranscriptionServiceBehavioral:
         ]
 
         mock_client = AsyncMock()
-        mock_client.audio.transcriptions.create = AsyncMock(
-            return_value=mock_transcription
-        )
+        mock_client.audio.transcriptions.create = AsyncMock(return_value=mock_transcription)
 
         with patch.object(service, "_get_client", return_value=mock_client):
-            result = await service.transcribe(
-                sample_audio_bytes, sample_filename
-            )
+            result = await service.transcribe(sample_audio_bytes, sample_filename)
 
         assert result.text == "Hello world"
         assert result.language == "en"
@@ -179,9 +173,7 @@ class TestTranscriptionServiceBehavioral:
         mock_transcription.segments = None
 
         mock_client = AsyncMock()
-        mock_client.audio.transcriptions.create = AsyncMock(
-            return_value=mock_transcription
-        )
+        mock_client.audio.transcriptions.create = AsyncMock(return_value=mock_transcription)
 
         with patch.object(service, "_get_client", return_value=mock_client):
             result = await service.transcribe(
@@ -191,9 +183,7 @@ class TestTranscriptionServiceBehavioral:
         assert result.language == "en"
 
     @pytest.mark.asyncio
-    async def test_transcribe_with_empty_audio_returns_empty(
-        self, sample_filename
-    ):
+    async def test_transcribe_with_empty_audio_returns_empty(self, sample_filename):
         """Calling transcribe with empty bytes returns empty result."""
         service = TranscriptionService(api_key="test-key")
 
@@ -204,9 +194,7 @@ class TestTranscriptionServiceBehavioral:
         mock_transcription.segments = None
 
         mock_client = AsyncMock()
-        mock_client.audio.transcriptions.create = AsyncMock(
-            return_value=mock_transcription
-        )
+        mock_client.audio.transcriptions.create = AsyncMock(return_value=mock_transcription)
 
         with patch.object(service, "_get_client", return_value=mock_client):
             result = await service.transcribe(b"", sample_filename)

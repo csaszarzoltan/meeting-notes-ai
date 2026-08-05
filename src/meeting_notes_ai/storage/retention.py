@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -113,9 +113,7 @@ async def sweep_expired(
         try:
             await storage.delete(row.object_key)
             row.deleted_at = now
-            await audit.log(
-                _expire_entry(row, now)
-            )
+            await audit.log(_expire_entry(row, now))
             sweep.deleted += 1
         except Exception:  # noqa: BLE001 — one bad file must not kill the sweep
             sweep.failed += 1

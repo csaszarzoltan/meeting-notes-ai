@@ -150,6 +150,4 @@ class FileEncryptor:
         except (InvalidTag, ValueError, EncryptionError) as exc:
             if isinstance(exc, EncryptionError):
                 raise
-            raise EncryptionError(
-                "decryption failed (tampered blob or wrong key)"
-            ) from exc
+            raise EncryptionError("decryption failed (tampered blob or wrong key)") from exc

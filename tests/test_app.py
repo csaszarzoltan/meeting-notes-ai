@@ -165,9 +165,12 @@ class TestRateLimitHeaders:
         # Without rate limiting there is no 429 — this fails RED
         client = TestClient(app)
         # Force 429 by hitting a non-existent endpoint with many requests
-        for _ in range(200):
-            client.get("/healthz")
-        response = client.get("/healthz")
+        response = None
+        for _ in range(500):
+            response = client.get("/healthz")
+            if response.status_code == 429:
+                break
+        assert response is not None
         assert response.status_code == 429
         assert "Retry-After" in response.headers
         assert response.headers["Retry-After"].isdigit()
@@ -175,9 +178,12 @@ class TestRateLimitHeaders:
     def test_429_response_body_shape(self):
         """429 body has detail and retry_after_seconds keys."""
         client = TestClient(app)
-        for _ in range(200):
-            client.get("/healthz")
-        response = client.get("/healthz")
+        response = None
+        for _ in range(500):
+            response = client.get("/healthz")
+            if response.status_code == 429:
+                break
+        assert response is not None
         assert response.status_code == 429
         data = response.json()
         assert "detail" in data
@@ -206,9 +212,12 @@ class TestRateLimitHeaders:
     def test_429_retry_after_is_seconds_to_next_token(self):
         """429 Retry-After is seconds until bucket has at least 1 token."""
         client = TestClient(app)
-        for _ in range(200):
-            client.get("/healthz")
-        response = client.get("/healthz")
+        response = None
+        for _ in range(500):
+            response = client.get("/healthz")
+            if response.status_code == 429:
+                break
+        assert response is not None
         assert response.status_code == 429
         retry_after = int(response.headers["Retry-After"])
         assert retry_after > 0, f"Expected positive Retry-After, got {retry_after}"

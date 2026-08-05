@@ -204,9 +204,7 @@ async def transcribe_audio(
         for segment in segments:
             seg_text, seg_matches = redactor.redact(segment.text)
             redaction_matches += len(seg_matches)
-            redacted_segments.append(
-                segment.model_copy(update={"text": seg_text})
-            )
+            redacted_segments.append(segment.model_copy(update={"text": seg_text}))
         segments = redacted_segments
 
     await audit.log(
@@ -284,9 +282,7 @@ async def export_audit_logs(
     return Response(
         content=export_path.read_text(encoding="utf-8"),
         media_type="application/x-ndjson",
-        headers={
-            "Content-Disposition": f'attachment; filename="{export_path.name}"'
-        },
+        headers={"Content-Disposition": f'attachment; filename="{export_path.name}"'},
     )
 
 
@@ -323,9 +319,7 @@ async def rotate_key(
     return RotateKeyResponse(re_wrapped_keys=count, rotated_at=rotated_at)
 
 
-@router.post(
-    "/api/v1/compliance/baa/generate", response_model=BAAGenerateResponse
-)
+@router.post("/api/v1/compliance/baa/generate", response_model=BAAGenerateResponse)
 async def generate_baa(
     request: Request,
     baa_request: BAAGenerateRequest,
@@ -383,9 +377,12 @@ async def compliance_dashboard(
     """
     from meeting_notes_ai.hipaa.dashboard import ComplianceService
 
-    service = ComplianceService(encryption_service=encryption,
-                                audit_logger=audit, phi_redactor=redactor,
-                                baa_service=_get_baa_service())
+    service = ComplianceService(
+        encryption_service=encryption,
+        audit_logger=audit,
+        phi_redactor=redactor,
+        baa_service=_get_baa_service(),
+    )
     summary = await service.get_summary()
     phi_stats = await service.get_phi_stats()
     activity = await service.get_recent_activity(limit=50)
@@ -407,9 +404,12 @@ async def compliance_dashboard_summary(
     """Return the compliance summary card data."""
     from meeting_notes_ai.hipaa.dashboard import ComplianceService
 
-    service = ComplianceService(encryption_service=encryption,
-                                audit_logger=audit, phi_redactor=redactor,
-                                baa_service=_get_baa_service())
+    service = ComplianceService(
+        encryption_service=encryption,
+        audit_logger=audit,
+        phi_redactor=redactor,
+        baa_service=_get_baa_service(),
+    )
     return asdict(await service.get_summary())
 
 
@@ -422,8 +422,7 @@ async def compliance_dashboard_phi_stats(
     """Return PHI detection statistics for the dashboard charts."""
     from meeting_notes_ai.hipaa.dashboard import ComplianceService
 
-    service = ComplianceService(encryption_service=encryption,
-                                phi_redactor=redactor)
+    service = ComplianceService(encryption_service=encryption, phi_redactor=redactor)
     return asdict(await service.get_phi_stats())
 
 
@@ -437,8 +436,7 @@ async def compliance_dashboard_activity(
     """Return recent audit activity (newest first)."""
     from meeting_notes_ai.hipaa.dashboard import ComplianceService
 
-    service = ComplianceService(encryption_service=encryption,
-                                audit_logger=audit)
+    service = ComplianceService(encryption_service=encryption, audit_logger=audit)
     return await service.get_recent_activity(limit=limit)
 
 
@@ -449,6 +447,4 @@ async def compliance_dashboard_activity(
 )
 async def compliance_dashboard_html(request: Request) -> HTMLResponse:
     """Serve the client-side compliance dashboard page (Chart.js)."""
-    return templates.TemplateResponse(
-        request=request, name="dashboard.html.jinja"
-    )
+    return templates.TemplateResponse(request=request, name="dashboard.html.jinja")

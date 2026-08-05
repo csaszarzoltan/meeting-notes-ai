@@ -108,6 +108,7 @@ class TestEncryptionServiceInterface:
     def test_init_accepts_config(self):
         """Constructor should accept HIPAAConfig + db_factory."""
         from meeting_notes_ai.hipaa.config import HIPAAConfig
+
         old = os.environ.get("HIPAA_MASTER_KEY")
         os.environ["HIPAA_MASTER_KEY"] = TEST_MASTER_KEY_HEX
         try:
@@ -285,9 +286,7 @@ class TestEncryptionServiceBehavioral:
         assert isinstance(dek, bytes) and len(dek) == 32
 
     @pytest.mark.asyncio
-    async def test_store_error_cleared_after_successful_save(
-        self, tmp_path, monkeypatch
-    ):
+    async def test_store_error_cleared_after_successful_save(self, tmp_path, monkeypatch):
         """S12: a corrupt store degrades the service, and a successful
         save (recovery cycle) clears the sticky error — the dashboard
         must not stay degraded until process restart."""

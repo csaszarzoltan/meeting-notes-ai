@@ -13,9 +13,8 @@ Endpoints under test:
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from inspect import signature
-from uuid import uuid4
 
 import pytest
 
@@ -166,7 +165,7 @@ class TestSharingInterface:
 
     def test_share_list_response_shares_is_list_of_share_response(self):
         """ShareListResponse.shares is a list of ShareResponse."""
-        from typing import get_origin, get_args
+        from typing import get_args, get_origin
 
         from meeting_notes_ai.routes.sharing import ShareListResponse, ShareResponse
 
@@ -232,9 +231,7 @@ class TestSharingInterface:
             if hasattr(r, "path") and hasattr(r, "methods"):
                 if "shares/" in r.path and "{share_id}" in r.path and "DELETE" in r.methods:
                     return
-        pytest.fail(
-            "DELETE .../{meeting_id}/shares/{share_id} route not found on sharing router"
-        )
+        pytest.fail("DELETE .../{meeting_id}/shares/{share_id} route not found on sharing router")
 
     # ── Route registration (public router) ────────────────────────────────────
 
@@ -516,7 +513,6 @@ class TestSharingBehavioral:
 
     def test_create_share_link_success(self, client, valid_token):
         """POST /share returns 201/200 with share link details."""
-        from meeting_notes_ai.routes.sharing import ShareResponse
 
         response = client.post(
             "/api/v1/meetings/test-meeting/share",
@@ -536,7 +532,6 @@ class TestSharingBehavioral:
         assert isinstance(data["token"], str) and len(data["token"]) > 0
         assert "public/shares/" in data["url"]
         # expires_at should be in the future
-        from datetime import datetime
 
         expires = datetime.fromisoformat(data["expires_at"])
         assert expires > datetime.now(expires.tzinfo)
@@ -604,7 +599,6 @@ class TestSharingBehavioral:
 
     def test_create_share_link_team_member_can_share(self, client, valid_token):
         """Meeting with team — team member (admin/member) can share (200)."""
-        from meeting_notes_ai.routes.sharing import ShareResponse
 
         response = client.post(
             "/api/v1/meetings/team-meeting/share",
@@ -628,9 +622,7 @@ class TestSharingBehavioral:
             json={"expires_in": "24h"},
             headers={"Authorization": f"Bearer {viewer_token}"},
         )
-        assert response.status_code == 403, (
-            f"Expected 403 for viewer, got {response.status_code}"
-        )
+        assert response.status_code == 403, f"Expected 403 for viewer, got {response.status_code}"
 
     # ── GET /api/v1/meetings/{meeting_id}/shares ──────────────────────────────
 
@@ -715,9 +707,7 @@ class TestSharingBehavioral:
             "/api/v1/meetings/test-meeting/shares/non-existent-share",
             headers={"Authorization": f"Bearer {valid_token}"},
         )
-        assert response.status_code == 404, (
-            f"Expected 404, got {response.status_code}"
-        )
+        assert response.status_code == 404, f"Expected 404, got {response.status_code}"
 
     def test_revoke_share_forbidden_not_creator(self, client):
         """DELETE /shares/{id} by non-creator returns 403."""

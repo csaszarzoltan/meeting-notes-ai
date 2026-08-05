@@ -11,7 +11,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from meeting_notes_ai.config import Settings, settings as default_settings
+from meeting_notes_ai.config import Settings
+from meeting_notes_ai.config import settings as default_settings
 from meeting_notes_ai.storage.base import ObjectStorageBackend
 from meeting_notes_ai.storage.local import LocalStorageBackend
 

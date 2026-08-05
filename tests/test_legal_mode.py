@@ -215,9 +215,7 @@ class TestLegalServiceBehavioral:
             parties=["Plaintiff"],
             date="2026-07-15",
         )
-        result = await service.process(
-            sample_transcript, case_metadata=cm
-        )
+        result = await service.process(sample_transcript, case_metadata=cm)
         assert result.case_metadata is not None
         assert result.case_metadata.case_number == "2026-CV-0042"
 

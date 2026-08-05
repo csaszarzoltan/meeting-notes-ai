@@ -13,7 +13,7 @@ import pytest
 # Mark as quick (unit tests)
 pytestmark = pytest.mark.quick
 
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 # ── Interface Tests (must PASS) ───────────────────────────────────────────────
 
@@ -203,10 +203,10 @@ class TestDBModelsInterface:
 
     def test_engine_functions_importable(self):
         from meeting_notes_ai.db.engine import (
+            close_db,
             create_db_engine,
             create_session_factory,
             init_db,
-            close_db,
         )
 
         assert callable(create_db_engine)
@@ -233,7 +233,7 @@ class TestDBModelsInterface:
     def test_engine_functions_are_async(self):
         import inspect
 
-        from meeting_notes_ai.db.engine import init_db, close_db
+        from meeting_notes_ai.db.engine import close_db, init_db
 
         assert inspect.iscoroutinefunction(init_db)
         assert inspect.iscoroutinefunction(close_db)
@@ -283,8 +283,6 @@ async def test_init_db_creates_tables():
     from meeting_notes_ai.db.engine import (
         close_db,
         create_db_engine,
-        create_session_factory,
-        init_db,
     )
     from meeting_notes_ai.db.models import Base
 
@@ -296,11 +294,7 @@ async def test_init_db_creates_tables():
 
     # Verify tables exist
     async with engine.begin() as conn:
-        result = await conn.run_sync(
-            lambda sync_conn: [
-                t for t in Base.metadata.tables.keys()
-            ]
-        )
+        result = await conn.run_sync(lambda sync_conn: [t for t in Base.metadata.tables.keys()])
 
     assert "users" in result
     assert "teams" in result
@@ -322,7 +316,6 @@ async def test_session_crud():
         close_db,
         create_db_engine,
         create_session_factory,
-        init_db,
     )
     from meeting_notes_ai.db.models import Base, User
 

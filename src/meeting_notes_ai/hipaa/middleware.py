@@ -5,6 +5,7 @@ services (audit log file handles, in-memory key store, redactor stats)
 survive across requests. A per-request instance would write to a
 different audit file and lose the key store on every call.
 """
+
 from __future__ import annotations
 
 from typing import Any

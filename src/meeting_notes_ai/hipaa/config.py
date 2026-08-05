@@ -73,8 +73,7 @@ class HIPAAConfig:
             )
         if self.audit_log_retention_days < 1:
             raise ValueError(
-                f"audit_log_retention_days must be >= 1, "
-                f"got {self.audit_log_retention_days}"
+                f"audit_log_retention_days must be >= 1, got {self.audit_log_retention_days}"
             )
 
     @classmethod

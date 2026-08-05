@@ -7,6 +7,7 @@ Interface tests must pass immediately; behavioral tests will fail
 Module under test:
   src/meeting_notes_ai/hipaa/baa.py  — BAAService
 """
+
 from __future__ import annotations
 
 from inspect import signature
@@ -230,12 +231,8 @@ class TestBAAServiceBehavioral:
     @pytest.mark.asyncio
     async def test_list_agreements_returns_list(self, svc):
         """list_agreements() returns a list of stored agreements."""
-        await svc.store_agreement(
-            org_name="Clinic A", ba_name="BA Corp", signed_by="Dr. 1"
-        )
-        await svc.store_agreement(
-            org_name="Clinic B", ba_name="BA Inc.", signed_by="Dr. 2"
-        )
+        await svc.store_agreement(org_name="Clinic A", ba_name="BA Corp", signed_by="Dr. 1")
+        await svc.store_agreement(org_name="Clinic B", ba_name="BA Inc.", signed_by="Dr. 2")
         agreements = await svc.list_agreements()
         assert isinstance(agreements, list)
         assert len(agreements) >= 2

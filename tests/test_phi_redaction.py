@@ -8,6 +8,7 @@ Module under test:
   src/meeting_notes_ai/hipaa/phi_patterns.py  — PHIMatch, PHIRedactionResult, PHIRedactor
   src/meeting_notes_ai/hipaa/config.py        — HIPAAConfig
 """
+
 from __future__ import annotations
 
 from dataclasses import fields, is_dataclass
@@ -538,9 +539,7 @@ class TestPHIRecompileRejectsZeroWidth:
             )
         )
 
-        redactor = phi.PHIRedactor(
-            config=HIPAAConfig(phi_patterns_path=str(patterns_file))
-        )
+        redactor = phi.PHIRedactor(config=HIPAAConfig(phi_patterns_path=str(patterns_file)))
 
         # Empty/zero-width patterns never enter the compiled set.
         assert "ssn" in redactor._compiled

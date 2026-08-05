@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ComplianceSummary:
     """Aggregated compliance metrics for the dashboard summary card."""
+
     total_phi_scans: int = 0
     total_redactions: int = 0
     active_encryption_keys: int = 0
@@ -35,6 +36,7 @@ class ComplianceSummary:
 @dataclass
 class PHIStats:
     """PHI detection statistics for the dashboard charts."""
+
     by_category: dict[str, int] = field(default_factory=dict)
     by_risk_level: dict[str, int] = field(default_factory=dict)
     by_date: dict[str, int] = field(default_factory=dict)
@@ -115,9 +117,7 @@ class ComplianceService:
             except Exception:
                 enc_health = "degraded"
                 enc_keys = 0
-                logger.exception(
-                    "compliance dashboard: encryption service unavailable"
-                )
+                logger.exception("compliance dashboard: encryption service unavailable")
 
         baa_count = 0
         baa_service = getattr(self, "_baa_service", None)
@@ -135,9 +135,7 @@ class ComplianceService:
             try:
                 stats_data = phi_redactor.get_stats()
                 phi_scans = stats_data.get("total_matches", 0)
-                redactions = stats_data.get(
-                    "total_redactions", stats_data.get("total_matches", 0)
-                )
+                redactions = stats_data.get("total_redactions", stats_data.get("total_matches", 0))
             except Exception:
                 logger.exception("compliance dashboard: redactor stats failed")
 
@@ -208,9 +206,7 @@ class ComplianceService:
             else:
                 keys = {}
             total = len(keys)
-            active = sum(
-                1 for info in keys.values() if getattr(info, "is_active", True)
-            )
+            active = sum(1 for info in keys.values() if getattr(info, "is_active", True))
             store_error = getattr(encryption_service, "_store_error", None)
             # S9: "healthy" requires at least one key; an empty registry
             # is "unprovisioned" (not lying about readiness), and a

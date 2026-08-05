@@ -9,6 +9,7 @@ Module under test:
 
 from __future__ import annotations
 
+import asyncio
 from inspect import signature
 
 import pytest
@@ -140,6 +141,7 @@ class TestRateLimitMiddlewareBehavioral:
     def app(self):
         """Provide a FastAPI app with RateLimitMiddleware applied."""
         from fastapi import FastAPI
+
         from meeting_notes_ai.middleware import RateLimitMiddleware
 
         app = FastAPI()
@@ -178,12 +180,8 @@ class TestRateLimitMiddlewareBehavioral:
         assert "X-RateLimit-Limit" in headers, (
             f"Missing X-RateLimit-Limit header. Headers: {dict(headers)}"
         )
-        assert "X-RateLimit-Remaining" in headers, (
-            "Missing X-RateLimit-Remaining header"
-        )
-        assert "X-RateLimit-Reset" in headers, (
-            "Missing X-RateLimit-Reset header"
-        )
+        assert "X-RateLimit-Remaining" in headers, "Missing X-RateLimit-Remaining header"
+        assert "X-RateLimit-Reset" in headers, "Missing X-RateLimit-Reset header"
 
     def test_rate_limit_headers_have_valid_values(self, client):
         """Rate limit headers contain numeric values."""
@@ -212,9 +210,7 @@ class TestRateLimitMiddlewareBehavioral:
                 break
 
         # After exhausting the limit, should get 429
-        assert 429 in responses, (
-            f"Never got 429 after sending requests. Statuses: {responses}"
-        )
+        assert 429 in responses, f"Never got 429 after sending requests. Statuses: {responses}"
 
     def test_429_response_has_retry_after_header(self, client):
         """429 response includes Retry-After header."""
@@ -241,9 +237,7 @@ class TestRateLimitMiddlewareBehavioral:
                     data = resp.json()
                 except Exception as exc:
                     pytest.fail(f"429 response is not valid JSON: {exc}")
-                assert "detail" in data, (
-                    f"429 response missing 'detail'. Body: {data}"
-                )
+                assert "detail" in data, f"429 response missing 'detail'. Body: {data}"
                 assert "retry_after_seconds" in data, (
                     f"429 response missing 'retry_after_seconds'. Body: {data}"
                 )
@@ -308,7 +302,7 @@ class TestRateLimitMiddlewareBehavioral:
         """Authenticated users are rate limited by user_id, not IP."""
         from meeting_notes_ai.auth import create_access_token
 
-        token = create_access_token("rate-limited-user")
+        token = asyncio.run(create_access_token("rate-limited-user"))
         headers = {"Authorization": f"Bearer {token}"}
 
         # Exhaust limit for this user

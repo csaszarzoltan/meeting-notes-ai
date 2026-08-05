@@ -154,9 +154,7 @@ class TestStorageApiBehavioral:
 
         # Point the app's local backend at a temp dir so tests never write
         # into the repo's data/storage directory.
-        monkeypatch.setattr(
-            settings, "storage_local_dir", str(tmp_path / "storage"), raising=False
-        )
+        monkeypatch.setattr(settings, "storage_local_dir", str(tmp_path / "storage"), raising=False)
         return TestClient(app)
 
     # ── Upload ────────────────────────────────────────────────────────────────

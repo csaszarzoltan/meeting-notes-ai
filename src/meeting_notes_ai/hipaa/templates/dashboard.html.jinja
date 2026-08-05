@@ -41,7 +41,7 @@
 
     <!-- N2 fix: the data endpoints require auth, so the page needs a Bearer
          token. Without it every fetch 401s and the dashboard can never
-         display data. The token is kept in localStorage (never sent to the
+         display data. The token is kept in sessionStorage (never sent to the
          page server) and attached to every API request. -->
     <div class="token-bar">
         <label for="token-input">API Token</label>
@@ -74,11 +74,11 @@
     <script>
         // ── N2 fix: Bearer token handling ────────────────────────────────────
         // The dashboard data endpoints require auth; the token is entered in
-        // the token bar, persisted in localStorage, and attached to every
+        // the token bar, persisted in sessionStorage, and attached to every
         // API request. 401 responses now prompt for a token instead of
         // silently showing "failed to load".
         const TOKEN_KEY = 'hipaa_dashboard_token';
-        let apiToken = localStorage.getItem(TOKEN_KEY) || '';
+        let apiToken = sessionStorage.getItem(TOKEN_KEY) || '';
 
         function authHeaders() {
             return apiToken ? { 'Authorization': 'Bearer ' + apiToken } : {};
@@ -93,11 +93,11 @@
         document.getElementById('token-apply').addEventListener('click', () => {
             apiToken = document.getElementById('token-input').value.trim();
             if (apiToken) {
-                localStorage.setItem(TOKEN_KEY, apiToken);
+                sessionStorage.setItem(TOKEN_KEY, apiToken);
                 showTokenStatus('Token saved — reloading data…', false);
                 loadAll();
             } else {
-                localStorage.removeItem(TOKEN_KEY);
+                sessionStorage.removeItem(TOKEN_KEY);
                 showTokenStatus('Token cleared.', false);
                 loadAll();
             }
@@ -205,7 +205,7 @@
             loadActivity();
         }
 
-        // Auto-fill the token input from localStorage on first paint.
+        // Auto-fill the token input from sessionStorage on first paint.
         if (apiToken) {
             document.getElementById('token-input').value = apiToken;
         }

@@ -1,4 +1,5 @@
 """Legal mode — deposition summaries with objection tracking."""
+
 from __future__ import annotations
 
 from meeting_notes_ai.models import (

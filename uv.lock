@@ -1247,8 +1247,8 @@ wheels = [
 
 [[package]]
 name = "meeting-notes-ai"
-version = "1.0.0"
-source = { virtual = "." }
+version = "1.0.2"
+source = { editable = "." }
 dependencies = [
     { name = "aiobotocore" },
     { name = "alembic" },

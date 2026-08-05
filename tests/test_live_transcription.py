@@ -492,9 +492,7 @@ class TestChunkJsonSerialization:
         """The deterministic repro: must NOT raise UnicodeDecodeError."""
         from meeting_notes_ai.services.live_transcription import _chunk_to_json
 
-        chunk = LiveChunk(
-            sequence=1, format=LiveChunkFormat.WEBM_OPUS, data=self.REAL_WEBM_HEADER
-        )
+        chunk = LiveChunk(sequence=1, format=LiveChunkFormat.WEBM_OPUS, data=self.REAL_WEBM_HEADER)
         dumped = _chunk_to_json(chunk)  # raises before the fix
         assert dumped["data"] == base64.b64encode(self.REAL_WEBM_HEADER).decode("ascii")
 
@@ -522,9 +520,7 @@ class TestChunkJsonSerialization:
             _chunk_to_json,
         )
 
-        chunk = LiveChunk(
-            sequence=7, format=LiveChunkFormat.WEBM_OPUS, data=self.REAL_WEBM_HEADER
-        )
+        chunk = LiveChunk(sequence=7, format=LiveChunkFormat.WEBM_OPUS, data=self.REAL_WEBM_HEADER)
         restored = _chunk_from_json(_chunk_to_json(chunk))
         assert restored.data == self.REAL_WEBM_HEADER
         assert restored.format is LiveChunkFormat.WEBM_OPUS

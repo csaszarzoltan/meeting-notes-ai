@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.2] — 2026-08-05
+
+### Security
+- Require JWT authentication for every private workspace endpoint and isolate all state by user ID.
+- Add audited, expiring public-share resolution with active-state and revocation enforcement.
+
+### Features
+- Save processing results into the canonical meeting library before review.
+- Add a session-scoped React authentication gate and authenticated API client.
+- Queue connector work only after adapter configuration without fabricating vendor completion.
+- Derive compliance status from authenticated workspace settings.
+
+### Fixes
+- Disable unavailable capture previews and wire compliance/evidence actions to explicit targets.
+- Remove runtime database artifacts and add deterministic GitHub Actions verification.
+
+### Tests
+- Add anonymous-access rejection, cross-tenant isolation, complete create-review-share-public-revoke flow, connector queue, and derived-compliance integration coverage.
+
+---
+
+## [1.0.1] — 2026-08-05
+
+### Features
+
+- Added a persistent product workspace API for meetings, review versions, actions, connectors, settings, compliance, batches, insights, and policy-gated shares.
+- Wired priority React screens to real API state instead of component-local demo arrays.
+- Added durable approval/rejection, source evidence, action synchronization references, cited search, and immediate share revocation.
+
+### Fixes
+
+- Added Hatchling src-layout packaging so the documented Uvicorn command works after `uv sync --frozen`.
+- Gated MinIO tests behind `RUN_S3_INTEGRATION=1`, stabilized the rate-limit assertion, and made frontend assets part of release verification.
+- Removed unsupported sharing claims and fabricated live-transcript/intelligence content.
+- Changed the legacy compliance token cache from localStorage to sessionStorage.
+- Ignored runtime databases and workspace state, and made the whole repository Ruff-clean.
+
+### Tests
+
+- Added real temporary-file I/O and FastAPI integration tests for all persisted workspace operations.
+- Replaced keyword-presence GUI tests with API-wiring and anti-facade contracts.
+
+### Docs
+
+- Corrected README, API documentation, and `FEATURES-DONE.md` to describe only implemented behavior and connector boundaries.
+
+---
+
 ## [1.0.0] — 2026-08-05
 
 ### Features

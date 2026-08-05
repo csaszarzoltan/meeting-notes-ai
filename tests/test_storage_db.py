@@ -19,6 +19,7 @@ pytestmark = pytest.mark.quick
 
 try:
     from meeting_notes_ai.db.models import StorageEncryption, StorageFileKind, StoredFile, Team
+
     _HAS_STORAGE_MODELS = True
 except (ImportError, AttributeError):  # pragma: no cover - pre-impl
     StoredFile = StorageEncryption = StorageFileKind = None

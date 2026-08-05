@@ -434,9 +434,7 @@ class TestBAASandbox:
         tpl = tmp_path / "escape.md.jinja"
         tpl.write_text("Covered Entity: {{ org_name }} / BA: {{ ba_name }}")
         svc = BAAService(config=HIPAAConfig(baa_template_path=str(tpl)))
-        out = await svc.generate_template(
-            '<script>alert("x")</script>', "A & B", "2026-08-01"
-        )
+        out = await svc.generate_template('<script>alert("x")</script>', "A & B", "2026-08-01")
         assert "<script>" not in out
         assert "&lt;script&gt;alert(&#34;x&#34;)&lt;/script&gt;" in out
         assert "A &amp; B" in out

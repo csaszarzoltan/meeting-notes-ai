@@ -36,6 +36,7 @@ from meeting_notes_ai.routes import (
     storage,
     teams,
     webhooks,
+    workspace,
 )
 from meeting_notes_ai.security_config import (
     validate_production_settings,
@@ -111,3 +112,5 @@ app.include_router(public.router)
 app.include_router(hipaa.router)
 app.include_router(storage.router)
 app.include_router(live_transcription.router)
+app.include_router(workspace.router)
+app.include_router(workspace.public_router)

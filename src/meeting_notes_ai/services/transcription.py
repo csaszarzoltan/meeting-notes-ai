@@ -1,4 +1,5 @@
 """Transcription service — OpenAI Whisper API integration."""
+
 from __future__ import annotations
 
 from io import BytesIO

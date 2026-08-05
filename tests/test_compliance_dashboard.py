@@ -7,6 +7,7 @@ Interface tests must pass immediately; behavioral tests will fail
 Module under test:
   src/meeting_notes_ai/hipaa/dashboard.py  — ComplianceService, ComplianceSummary, PHIStats
 """
+
 from __future__ import annotations
 
 from dataclasses import fields, is_dataclass
@@ -393,9 +394,7 @@ class TestEncryptionHealthLabeling:
     @pytest.mark.asyncio
     async def test_zero_key_wired_service_is_unprovisioned(self):
         """A wired EncryptionService with 0 keys must not report healthy."""
-        svc = ComplianceService(
-            encryption_service=self._FakeEncryptionService(key_count=0)
-        )
+        svc = ComplianceService(encryption_service=self._FakeEncryptionService(key_count=0))
         summary = await svc.get_summary()
         assert summary.active_encryption_keys == 0
         assert summary.encryption_health == "unprovisioned"
@@ -403,9 +402,7 @@ class TestEncryptionHealthLabeling:
     @pytest.mark.asyncio
     async def test_wired_service_with_keys_is_healthy(self):
         """A wired service with >= 1 key reports healthy."""
-        svc = ComplianceService(
-            encryption_service=self._FakeEncryptionService(key_count=2)
-        )
+        svc = ComplianceService(encryption_service=self._FakeEncryptionService(key_count=2))
         summary = await svc.get_summary()
         assert summary.active_encryption_keys == 2
         assert summary.encryption_health == "healthy"
@@ -424,9 +421,7 @@ class TestEncryptionHealthLabeling:
     @pytest.mark.asyncio
     async def test_encryption_status_unprovisioned_when_zero_keys(self):
         """get_encryption_status() mirrors the unprovisioned label."""
-        svc = ComplianceService(
-            encryption_service=self._FakeEncryptionService(key_count=0)
-        )
+        svc = ComplianceService(encryption_service=self._FakeEncryptionService(key_count=0))
         status = await svc.get_encryption_status()
         assert status["status"] == "unprovisioned"
         assert status["total_keys"] == 0
@@ -434,9 +429,7 @@ class TestEncryptionHealthLabeling:
     @pytest.mark.asyncio
     async def test_encryption_status_healthy_with_keys(self):
         """get_encryption_status() reports healthy with keys present."""
-        svc = ComplianceService(
-            encryption_service=self._FakeEncryptionService(key_count=2)
-        )
+        svc = ComplianceService(encryption_service=self._FakeEncryptionService(key_count=2))
         status = await svc.get_encryption_status()
         assert status["status"] == "healthy"
         assert status["total_keys"] == 2

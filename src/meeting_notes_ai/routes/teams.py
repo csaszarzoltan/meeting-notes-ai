@@ -110,9 +110,7 @@ async def list_teams(
     db: AsyncSession = Depends(get_db_session),
 ) -> TeamListResponse:
     """List all teams the current user belongs to."""
-    result = await db.execute(
-        select(TeamMember).where(TeamMember.user_id == user["user_id"])
-    )
+    result = await db.execute(select(TeamMember).where(TeamMember.user_id == user["user_id"]))
     memberships = result.scalars().all()
     team_ids = [m.team_id for m in memberships]
 
@@ -121,9 +119,7 @@ async def list_teams(
         team_result = await db.execute(select(Team).where(Team.id == tid))
         team = team_result.scalar_one_or_none()
         if team:
-            count_result = await db.execute(
-                select(TeamMember).where(TeamMember.team_id == tid)
-            )
+            count_result = await db.execute(select(TeamMember).where(TeamMember.team_id == tid))
             count = len(count_result.scalars().all())
             teams.append(_team_to_response(team, member_count=count))
 
@@ -153,9 +149,7 @@ async def get_team(
     if team is None:
         raise HTTPException(status_code=404, detail="Team not found")
 
-    count_result = await db.execute(
-        select(TeamMember).where(TeamMember.team_id == team_id)
-    )
+    count_result = await db.execute(select(TeamMember).where(TeamMember.team_id == team_id))
     member_count = len(count_result.scalars().all())
 
     return _team_to_response(team, member_count=member_count)
@@ -185,9 +179,7 @@ async def invite_member(
     await _require_admin(team_id, user["user_id"], db)
 
     # Find user by email
-    user_result = await db.execute(
-        select(User).where(User.email == request.email)
-    )
+    user_result = await db.execute(select(User).where(User.email == request.email))
     invited_user = user_result.scalar_one_or_none()
     if invited_user is None:
         raise HTTPException(status_code=404, detail="User not found")

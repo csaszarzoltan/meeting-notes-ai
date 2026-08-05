@@ -1,4 +1,5 @@
 """Multi-format export service — JSON, Markdown, PDF, and ZIP batch export."""
+
 from __future__ import annotations
 
 import io
@@ -144,9 +145,7 @@ class ExportService:
         """
         suffix = ".json" if format == "json" else ".md"
         content = (
-            self.export_json(result)
-            if format == "json"
-            else self.export_markdown(result, mode)
+            self.export_json(result) if format == "json" else self.export_markdown(result, mode)
         )
 
         with tempfile.NamedTemporaryFile(

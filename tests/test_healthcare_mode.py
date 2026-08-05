@@ -203,9 +203,7 @@ class TestHealthcareServiceBehavioral:
         assert result.de_identified is True  # No patient_id provided
 
     @pytest.mark.asyncio
-    async def test_process_with_patient_id(
-        self, sample_transcript, sample_patient_id
-    ):
+    async def test_process_with_patient_id(self, sample_transcript, sample_patient_id):
         """Calling process with patient_id should include HIPAA markers."""
         extraction = ExtractionService.__new__(ExtractionService)
         service = HealthcareService(extraction_service=extraction)
@@ -219,9 +217,7 @@ class TestHealthcareServiceBehavioral:
         )
         service.extraction_service = mock_extraction
 
-        result = await service.process(
-            sample_transcript, patient_id=sample_patient_id
-        )
+        result = await service.process(sample_transcript, patient_id=sample_patient_id)
         assert isinstance(result, HealthcareNote)
         assert any(m.risk_level == "high" for m in result.hipaa_markers)
 
@@ -240,9 +236,7 @@ class TestHealthcareServiceBehavioral:
         )
         service.extraction_service = mock_extraction
 
-        result = await service.process(
-            sample_transcript, consent_confirmed=True
-        )
+        result = await service.process(sample_transcript, consent_confirmed=True)
         assert result.consent_status.confirmed is True
 
     @pytest.mark.asyncio

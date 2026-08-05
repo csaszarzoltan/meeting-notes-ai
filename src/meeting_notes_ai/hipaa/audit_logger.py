@@ -11,6 +11,7 @@ permissions make the trail durable and private. Rotated/archived files
 (matched via ``audit-*.jsonl``) remain queryable, and corrupt or
 tampered lines are counted and surfaced instead of silently dropped.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -58,16 +59,12 @@ def _canonical(data: dict[str, Any]) -> str:
     Byte-stable regardless of key insertion order, so the hash computed
     at write time can be re-verified after a JSON round-trip on read.
     """
-    return json.dumps(
-        data, sort_keys=True, separators=(",", ":"), ensure_ascii=False
-    )
+    return json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
 def _chain_hash(prev_hash: str, data: dict[str, Any]) -> str:
     """SHA-256 of ``prev_hash + canonical(entry)``."""
-    return hashlib.sha256(
-        (prev_hash + _canonical(data)).encode("utf-8")
-    ).hexdigest()
+    return hashlib.sha256((prev_hash + _canonical(data)).encode("utf-8")).hexdigest()
 
 
 def _append_prefix(path: Path) -> str:
@@ -145,9 +142,7 @@ class AuditLogger:
                         # Corrupt / partial line — not a chain anchor.
                         continue
                     chain = data.get("_chain") if isinstance(data, dict) else None
-                    if isinstance(chain, dict) and isinstance(
-                        chain.get("hash"), str
-                    ):
+                    if isinstance(chain, dict) and isinstance(chain.get("hash"), str):
                         last_hash = chain["hash"]
         except OSError:
             return None
@@ -164,9 +159,7 @@ class AuditLogger:
         corrupt = 0
         tampered = 0
         log_dir = self._get_log_dir()
-        files = sorted(
-            p for p in log_dir.glob("audit-*.jsonl") if p.is_file()
-        )
+        files = sorted(p for p in log_dir.glob("audit-*.jsonl") if p.is_file())
         for path in files:
             prev_hash = _GENESIS_HASH
             try:
@@ -189,17 +182,10 @@ class AuditLogger:
                         except TypeError:
                             corrupt += 1
                             continue
-                        if isinstance(chain, dict) and isinstance(
-                            chain.get("hash"), str
-                        ):
+                        if isinstance(chain, dict) and isinstance(chain.get("hash"), str):
                             # Verify the per-file hash chain.
-                            computed = _chain_hash(
-                                chain.get("prev", ""), data
-                            )
-                            if (
-                                chain.get("prev") == prev_hash
-                                and computed == chain["hash"]
-                            ):
+                            computed = _chain_hash(chain.get("prev", ""), data)
+                            if chain.get("prev") == prev_hash and computed == chain["hash"]:
                                 prev_hash = chain["hash"]
                             else:
                                 tampered += 1
@@ -208,17 +194,14 @@ class AuditLogger:
                         # but do not advance the chain.
                         entries.append(entry)
             except OSError as exc:
-                logger.warning(
-                    "audit log read failed for %s: %s", path, exc
-                )
+                logger.warning("audit log read failed for %s: %s", path, exc)
         self._last_read_stats = {
             "corrupt_lines": corrupt,
             "tampered_lines": tampered,
         }
         if corrupt or tampered:
             logger.warning(
-                "audit log integrity: %d corrupt line(s), %d tampered "
-                "line(s) in %s",
+                "audit log integrity: %d corrupt line(s), %d tampered line(s) in %s",
                 corrupt,
                 tampered,
                 log_dir,
@@ -246,15 +229,11 @@ class AuditLogger:
         if not entry.resource:
             missing.append("resource")
         if missing:
-            raise ValueError(
-                f"Missing required fields: {', '.join(missing)}"
-            )
+            raise ValueError(f"Missing required fields: {', '.join(missing)}")
 
         # S8: never write plaintext PHI into the audit trail unredacted.
         if entry.details and _PHI_DETAILS_RE.search(str(entry.details)):
-            raise ValueError(
-                "AuditEntry.details must not contain plaintext PHI (SSN)"
-            )
+            raise ValueError("AuditEntry.details must not contain plaintext PHI (SSN)")
 
         async with self._lock:
             log_path = self._current_log_path()
@@ -283,9 +262,7 @@ class AuditLogger:
                 # Enforce audit_log_max_bytes: archive the active file
                 # before the append would push it past the cap. The fresh
                 # file re-anchors its hash chain at genesis.
-                if self._auto_rotate_if_needed(
-                    log_path, len(line.encode("utf-8"))
-                ):
+                if self._auto_rotate_if_needed(log_path, len(line.encode("utf-8"))):
                     record["_chain"] = {
                         "prev": _GENESIS_HASH,
                         "hash": _chain_hash(_GENESIS_HASH, entry_data),
@@ -346,11 +323,7 @@ class AuditLogger:
             if since:
                 try:
                     datetime.fromisoformat(since)
-                    all_entries = [
-                        e
-                        for e in all_entries
-                        if e.timestamp and e.timestamp >= since
-                    ]
+                    all_entries = [e for e in all_entries if e.timestamp and e.timestamp >= since]
                 except (ValueError, TypeError):
                     pass
 
@@ -364,12 +337,8 @@ class AuditLogger:
             for e in all_entries:
                 action_counts[e.action] = action_counts.get(e.action, 0) + 1
                 actor_counts[e.actor] = actor_counts.get(e.actor, 0) + 1
-                outcome_counts[e.outcome] = (
-                    outcome_counts.get(e.outcome, 0) + 1
-                )
-                phi_counts[e.phi_classification] = (
-                    phi_counts.get(e.phi_classification, 0) + 1
-                )
+                outcome_counts[e.outcome] = outcome_counts.get(e.outcome, 0) + 1
+                phi_counts[e.phi_classification] = phi_counts.get(e.phi_classification, 0) + 1
 
             return {
                 "total_entries": len(all_entries),
@@ -454,19 +423,12 @@ class AuditLogger:
 
         def _export() -> Path:
             all_entries, _, _ = self._read_all()
-            filtered = [
-                e
-                for e in all_entries
-                if e.timestamp and start <= e.timestamp <= end
-            ]
+            filtered = [e for e in all_entries if e.timestamp and start <= e.timestamp <= end]
 
             export_dir = self._get_log_dir() / "exports"
             export_dir.mkdir(parents=True, exist_ok=True)
 
-            export_path = (
-                export_dir
-                / f"audit-export-{start}-{end}-{uuid.uuid4().hex[:8]}.jsonl"
-            )
+            export_path = export_dir / f"audit-export-{start}-{end}-{uuid.uuid4().hex[:8]}.jsonl"
             with open(export_path, "w", encoding="utf-8") as f:
                 for entry in filtered:
                     f.write(json.dumps(asdict(entry)) + "\n")
