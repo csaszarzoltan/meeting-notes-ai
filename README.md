@@ -1,5 +1,54 @@
 # MeetingNotesAI
 
+MeetingNotesAI is a privacy-first meeting workspace that turns live or uploaded conversations into **verified notes and completed work**. The v0.9 interface unifies recording, meeting history, evidence-linked review, actions, sharing, teams, compliance, integrations, and settings in one responsive React application.
+
+## v0.9 product experience
+
+The three highest-priority findings from `research-findings.md` now drive the product:
+
+1. **Unified React workspace:** one modern application shell replaces the fragmented upload page, live page, and isolated admin surfaces. This addresses the research finding that the broad backend felt like disconnected API operations.
+2. **Meeting library:** searchable, filterable meeting history with clear review states and useful empty states. This addresses the repeat-use need to find prior decisions, people, and open work.
+3. **Evidence-linked review:** editable summary, timestamped source evidence, audio controls, decisions, action cards, and explicit approval. This addresses the strongest trust gap: users need to verify AI output before sharing or relying on it.
+
+The upload path is a real end-to-end flow: choose a file, set meeting context and visible privacy defaults, submit to `POST /api/v1/meetings`, follow processing status, review the result, and approve it. Healthcare mode requires consent in the UI and enables sensitive-information masking by default.
+
+### Run locally
+
+```bash
+uv sync --frozen
+cd frontend && npm ci && npm run build && cd ..
+uv run uvicorn meeting_notes_ai.main:app --reload
+```
+
+Open `http://127.0.0.1:8000/app`. Set `OPENAI_API_KEY` for real transcription and extraction. Production deployments must also set strong `JWT_SECRET`, storage, and encryption settings described below.
+
+### Frontend development
+
+```bash
+cd frontend
+npm ci
+npm run dev
+```
+
+Vite proxies `/api` and `/app` to the FastAPI server. Direct frontend dependencies are exactly pinned and the lockfile is committed for reproducible builds.
+
+### Main user flow
+
+1. Open the workspace and choose **Record**.
+2. Upload WAV, MP3, MP4, or WebM audio up to 25 MB, or switch to live transcription.
+3. Select General, Healthcare, or Legal context. Healthcare requires consent and PHI protection.
+4. Follow friendly upload and processing states.
+5. Review the editable summary, decisions, actions, transcript evidence, and audio.
+6. Approve the reviewed version before sharing.
+
+### Accessibility and responsive design
+
+The workspace includes semantic landmarks, labels, ARIA live regions, keyboard-visible focus, a skip link, reduced-motion support, non-color status labels, and responsive layouts for desktop, tablet, and mobile. Run `npm run typecheck` and `npm run build` to verify the TypeScript surface.
+
+---
+
+# MeetingNotesAI
+
 Micro-SaaS for meeting transcription and structured notes.
 
 ![Version](https://img.shields.io/badge/version-0.8.0-blue)

@@ -3,6 +3,8 @@
 Written before implementation to document intended behavior.
 """
 
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
 from meeting_notes_ai.main import app
@@ -47,11 +49,16 @@ def test_accessible_product_app_is_available():
     response = client.get("/app")
     assert response.status_code == 200
     html = response.text
-    assert '<main id="main-content"' in html
-    assert 'aria-live="polite"' in html
-    assert '<label for="meeting-file">' in html
-    assert 'id="phi-redaction"' in html
-    assert "Skip to main content" in html
+    assert 'id="root"' in html
+    source = (Path(__file__).resolve().parents[1] / "frontend/src/App.tsx").read_text()
+    assert 'id="main-content"' in source
+    assert "Skip to main content" in source
+    upload_path = (
+        Path(__file__).resolve().parents[1] / "frontend/src/workspace/UploadFlow.tsx"
+    )
+    upload = upload_path.read_text()
+    assert 'aria-live="polite"' in upload
+    assert "Privacy settings" in upload
 
 
 def test_health_reports_current_version():

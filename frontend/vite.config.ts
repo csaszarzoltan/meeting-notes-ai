@@ -6,7 +6,7 @@ import react from '@vitejs/plugin-react';
 // index.html references the absolute asset URLs the server actually serves.
 export default defineConfig({
   plugins: [react()],
-  base: '/app/live/',
+  base: '/app/',
   build: {
     outDir: 'dist',
     emptyOutDir: true,

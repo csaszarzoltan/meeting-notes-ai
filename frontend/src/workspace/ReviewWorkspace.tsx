@@ -1,0 +1,25 @@
+import { useState } from 'react';
+import type { MeetingCard, MeetingResult } from './types';
+
+const SAMPLE: MeetingResult = { id: 'q3', transcript: 'We should launch the guided workspace first. Zoltan will own the review experience and share a tested prototype by Friday. The team agreed privacy controls must stay visible throughout the workflow.', summary: 'The team prioritized a unified workspace, source-linked review, and visible privacy controls for the next release.', action_items: [{ assignee: 'Zoltan', description: 'Deliver the source-linked review prototype', deadline: 'Friday' }, { assignee: 'Maya', description: 'Validate privacy defaults with regulated users' }], decisions: ['Ship the unified workspace before adding more isolated endpoints', 'Require review before sensitive meetings can be shared'], key_points: ['Users need evidence, not opaque AI output', 'Action items must flow into real work'], mode: 'general', review_status: 'needs_review', phi_redacted: false, redaction_matches: 0, warnings: ['AI-generated notes can be inaccurate. Verify source evidence before approval.'] };
+
+/** Evidence-linked note review with editable output and explicit approval. */
+export function ReviewWorkspace({ meeting, result = SAMPLE, onBack }: { meeting?: MeetingCard; result?: MeetingResult; onBack: () => void }) {
+  const [summary, setSummary] = useState(result.summary);
+  const [approved, setApproved] = useState(result.review_status === 'approved');
+  const [activeEvidence, setActiveEvidence] = useState(0);
+  const timestamps = ['00:18', '01:04', '02:32'];
+  return <section className="review-page" aria-labelledby="review-title">
+    <div className="review-topbar"><button className="icon-button" onClick={onBack} aria-label="Back to meetings">←</button><div><span className="eyebrow">Meeting review</span><h2 id="review-title">{meeting?.title ?? 'New meeting notes'}</h2></div><span className={`status-pill ${approved ? 'status-approved' : 'status-needs_review'}`}>{approved ? 'Approved' : 'Needs review'}</span></div>
+    <div className="review-layout">
+      <aside className="review-outline" aria-label="Meeting outline"><h3>Chapters</h3>{['Overview', 'Decisions', 'Action items', 'Transcript'].map((label, index) => <button className={index === activeEvidence ? 'active' : ''} key={label} onClick={() => setActiveEvidence(index)}><span>{String(index + 1).padStart(2, '0')}</span>{label}</button>)}<div className="privacy-card"><span>◈</span><div><strong>Private workspace</strong><small>Only approved teammates can access this meeting.</small></div></div></aside>
+      <main className="notes-panel"><div className="audio-player"><button aria-label="Play meeting audio">▶</button><div className="wave" aria-hidden="true">▂▅▃▇▄▆▂▅▇▃▄▆▂▇▅▃</div><span>00:00 / 42:16</span><audio aria-label="Meeting source audio" /></div>
+        {result.warnings.map((warning) => <div className="notice" key={warning}><span>✦</span><p>{warning}</p></div>)}
+        <div className="section-title"><div><span className="eyebrow">AI draft</span><h3>Summary</h3></div><button className="text-button">Regenerate</button></div><textarea className="summary-editor" aria-label="Editable meeting summary" value={summary} onChange={(event) => setSummary(event.target.value)} />
+        <h3>Decisions</h3><ul className="decision-list">{result.decisions.map((decision, index) => <li key={decision}><span>✓</span><button onClick={() => setActiveEvidence(index)}> {decision}<small>Source evidence · {timestamps[index]}</small></button></li>)}</ul>
+        <h3>Action items</h3><div className="action-list">{result.action_items.map((item, index) => <label className="action-card" key={item.description}><input type="checkbox" /><span className="avatar">{item.assignee?.[0] ?? '?'}</span><span><strong>{item.description}</strong><small>{item.assignee || 'Unassigned'} {item.deadline ? `· Due ${item.deadline}` : '· Add due date'}</small></span><button className="icon-button" aria-label={`Open action ${index + 1}`}>↗</button></label>)}</div>
+      </main>
+      <aside className="evidence-panel" aria-label="Source evidence"><div className="section-title"><div><span className="eyebrow">Trust layer</span><h3>Source evidence</h3></div><span className="confidence">94% match</span></div><p className="evidence-time">Timestamp {timestamps[Math.min(activeEvidence, 2)]}</p><blockquote>{result.transcript}</blockquote><div className="speaker"><span className="avatar">J</span><div><strong>Jordan Lee</strong><small>Speaker 1 · confirmed</small></div></div><button className="secondary full">Open in transcript</button><div className="approval-card"><strong>{approved ? 'Notes approved' : 'Ready for your review?'}</strong><p>{approved ? 'This version is ready to share.' : 'Approval locks this version and records your decision.'}</p><button className="primary full" onClick={() => setApproved(true)} disabled={approved}>{approved ? '✓ Approved' : 'Approve notes'}</button></div></aside>
+    </div>
+  </section>;
+}

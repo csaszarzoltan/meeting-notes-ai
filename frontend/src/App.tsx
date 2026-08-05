@@ -1,21 +1,16 @@
+import { useState } from 'react';
 import { LiveTranscriptionView } from './live/LiveTranscriptionView';
+import { Dashboard } from './workspace/Dashboard';
+import { MeetingLibrary } from './workspace/MeetingLibrary';
+import { PlaceholderView } from './workspace/PlaceholderView';
+import { ReviewWorkspace } from './workspace/ReviewWorkspace';
+import { UploadFlow } from './workspace/UploadFlow';
+import type { MeetingCard, MeetingResult, WorkspaceView } from './workspace/types';
 
+const NAV: Array<[WorkspaceView, string, string]> = [['home','⌂','Home'],['meetings','◫','Meetings'],['record','●','Record'],['batches','▦','Batches'],['actions','✓','Actions'],['team','♙','Team'],['sharing','↗','Sharing'],['compliance','◈','Compliance'],['integrations','◇','Integrations'],['settings','⚙','Settings']];
+/** Unified responsive application shell for every product capability. */
 export function App() {
-  return (
-    <div className="wrap">
-      <header>
-        <h1>MeetingNotesAI</h1>
-        <p className="muted">Live transcription and action items — stream from your microphone.</p>
-        <nav aria-label="Dashboard sections">
-          <a href="/app">Upload &amp; review</a>
-          <a href="/app/live" aria-current="page" className="active">
-            Live transcription
-          </a>
-        </nav>
-      </header>
-      <main id="main-content" tabIndex={-1}>
-        <LiveTranscriptionView />
-      </main>
-    </div>
-  );
+  const [view, setView] = useState<WorkspaceView>('home'); const [mobileOpen, setMobileOpen] = useState(false); const [selected, setSelected] = useState<MeetingCard | null>(null); const [result, setResult] = useState<MeetingResult | null>(null); const [live, setLive] = useState(false);
+  const navigate = (next: WorkspaceView) => { setView(next); setSelected(null); setResult(null); setLive(false); setMobileOpen(false); };
+  return <div className="app-shell"><a className="skip-link" href="#main-content">Skip to main content</a><aside className={`sidebar ${mobileOpen ? 'open' : ''}`}><div className="brand"><span className="brand-mark">M</span><div><strong>MeetingNotes</strong><small>Verified intelligence</small></div></div><nav aria-label="Product navigation">{NAV.map(([id, icon, label]) => <button key={id} className={view === id && !selected ? 'active' : ''} onClick={() => navigate(id)}><span aria-hidden="true">{icon}</span>{label}{label === 'Actions' && <em>12</em>}</button>)}</nav><div className="sidebar-bottom"><div className="security-chip"><span>◈</span><div><strong>Privacy protected</strong><small>All systems healthy</small></div></div><button className="user-chip"><span className="avatar">Z</span><span><strong>Zoltan</strong><small>Acme workspace</small></span><span>⋯</span></button></div></aside><div className="app-frame"><header className="topbar"><button className="mobile-menu" onClick={() => setMobileOpen(!mobileOpen)} aria-label="Toggle navigation">☰</button><label className="global-search"><span>⌕</span><input aria-label="Search workspace" placeholder="Search meetings, actions, or people" /><kbd>⌘ K</kbd></label><div className="top-actions"><button className="icon-button" aria-label="Help">?</button><button className="icon-button notification" aria-label="Notifications">♢<i></i></button><button className="primary compact" onClick={() => navigate('record')}>＋ New meeting</button></div></header><main id="main-content" tabIndex={-1} className={selected || result ? 'main-wide' : ''}>{selected || result ? <ReviewWorkspace meeting={selected ?? undefined} result={result ?? undefined} onBack={() => { setSelected(null); setResult(null); setView('meetings'); }} /> : live ? <LiveTranscriptionView /> : view === 'home' ? <Dashboard navigate={navigate} openMeeting={setSelected} /> : view === 'meetings' ? <MeetingLibrary onOpen={setSelected} /> : view === 'record' ? <><div className="record-mode"><button className={!live ? 'active' : ''} onClick={() => setLive(false)}>Upload recording</button><button className={live ? 'active' : ''} onClick={() => setLive(true)}>Live transcription</button></div><UploadFlow onComplete={setResult} /></> : <PlaceholderView view={view} />}</main></div></div>;
 }
