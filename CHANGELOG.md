@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.1.2] — 2026-08-06
 
+### Features
+- Google Calendar OAuth2 integration — connect Google Calendar (`calendar.readonly` scope, CSRF state tokens, AES-256-GCM encrypted tokens at rest), auto-detect upcoming meetings, and one-click import as meeting records. The router at `/api/v1/integrations/google-calendar` exposes `auth` / `callback` / `events` / `import/{event_id}` / `status` / `disconnect`; the full guide is in `docs/integrations/google-calendar.md`.
+
 ### Fixed
 - Google Calendar import: uniqueness is now per (user, event); importing a shared-calendar event already imported by another user returns 409 instead of an unhandled 500. Added a composite unique index via migration 20260806_0005.
 - Google Calendar events endpoint maps token expiry to 401 and upstream API failures to 502 (previously raw 500s).

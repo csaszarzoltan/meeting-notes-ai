@@ -19,12 +19,12 @@ cd frontend && npm ci && npm run build && cd ..
 uv run uvicorn meeting_notes_ai.main:app --reload
 ```
 
-Open `http://127.0.0.1:8000/app`. Create an account through `POST /api/v1/auth/signup` or use an existing account, then sign in through the product shell. Set `OPENAI_API_KEY` for real transcription/extraction and production-grade secrets described in `.env.example` and `docs/HIPAA_MODE.md`.
+Open `http://127.0.0.1:8000/app`. Create an account through `POST /api/v1/auth/signup` or use an existing account, then sign in through the product shell. Set `OPENAI_API_KEY` for real transcription/extraction and production-grade secrets described in `.env.example` and `docs/HIPAA_MODE.md`. To connect Google Calendar (see [docs/integrations/google-calendar.md](docs/integrations/google-calendar.md)), also set `GOOGLE_CALENDAR_CLIENT_ID`, `GOOGLE_CALENDAR_CLIENT_SECRET`, and — if your deployment differs from the default — `GOOGLE_CALENDAR_REDIRECT_URI`; the token encryptor additionally requires `STORAGE_ENCRYPTION_KEY` or `HIPAA_MASTER_KEY`.
 
 ## Main user flow
 
 1. Sign in to the private, tenant-scoped workspace.
-2. Record live or upload WAV, MP3, MP4, or WebM.
+2. Record live or upload WAV, MP3, MP4, or WebM — or connect Google Calendar and import an upcoming meeting with one click (see [docs/integrations/google-calendar.md](docs/integrations/google-calendar.md)).
 3. Select General, Healthcare, or Legal context and review visible privacy settings.
 4. The processed result is saved as one canonical meeting.
 5. Edit the summary, inspect cited evidence, seek source audio, and approve or reject.
@@ -42,7 +42,7 @@ Connect a Google account through OAuth2, browse upcoming events, and import a me
 - `POST /api/v1/integrations/google-calendar/import/{event_id}` — create a meeting from a calendar event (409 on duplicate import)
 - `GET /api/v1/integrations/google-calendar/status` and `DELETE /api/v1/integrations/google-calendar/disconnect` — manage the connection
 
-Tokens are encrypted at rest (AES-256-GCM) and refreshed automatically; expired or revoked tokens surface a re-authorization prompt instead of a raw error.
+Tokens are encrypted at rest (AES-256-GCM) and refreshed automatically; expired or revoked tokens surface a re-authorization prompt instead of a raw error. Full setup (Google Cloud Console prerequisites, env vars, user flow, API reference, troubleshooting) is in [docs/integrations/google-calendar.md](docs/integrations/google-calendar.md).
 
 ## Security model
 
