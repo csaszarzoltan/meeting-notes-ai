@@ -26,6 +26,13 @@ const NAV: Array<[WorkspaceView, string, string]> = [
 
 /** Unified responsive application shell for the capture, trust, and execution layers. */
 export function App() {
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('calendar_connected') === '1') {
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+  }, []);
   const [view, setView] = useState<WorkspaceView>('home');
   const [mobileOpen, setMobileOpen] = useState(false);
   const [selected, setSelected] = useState<MeetingCard | null>(null);
