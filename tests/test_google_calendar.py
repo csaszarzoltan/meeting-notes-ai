@@ -944,6 +944,110 @@ class TestEventListingBehavioral:
                 assert events[0]["imported"] is True
 
 
+class TestEventAttendeeFieldMappingBehavioral:
+    """Regression: Google camelCase displayName/responseStatus map to snake_case API fields."""
+
+    @pytest.fixture
+    def auth_headers(self):
+        return {"Authorization": "Bearer test-token"}
+
+    @pytest.mark.asyncio
+    async def test_normalize_event_maps_attendee_fields_to_snake_case(self):
+        """_normalize_event emits display_name/response_status, not camelCase keys."""
+        from meeting_notes_ai.services.google_calendar import GoogleCalendarService
+
+        svc = GoogleCalendarService(
+            client_id="cid", client_secret="csecret", redirect_uri="http://test/cb", encryptor=None
+        )
+        raw = {
+            "id": "evt-1",
+            "summary": "Q3 Planning",
+            "start": {"dateTime": "2026-08-07T10:00:00+02:00"},
+            "end": {"dateTime": "2026-08-07T11:00:00+02:00"},
+            "attendees": [
+                {
+                    "email": "alice@example.com",
+                    "displayName": "Alice",
+                    "responseStatus": "accepted",
+                },
+                {
+                    "email": "bob@example.com",
+                    "displayName": "Bob",
+                    "responseStatus": "tentative",
+                },
+            ],
+            "organizer": {"email": "carol@example.com", "displayName": "Carol"},
+        }
+        normalized = svc._normalize_event(raw)
+        assert normalized["attendees"][0] == {
+            "email": "alice@example.com",
+            "display_name": "Alice",
+            "response_status": "accepted",
+        }
+        assert normalized["attendees"][1]["display_name"] == "Bob"
+        assert normalized["attendees"][1]["response_status"] == "tentative"
+        assert normalized["organizer"] == {"email": "carol@example.com", "display_name": "Carol"}
+
+    @pytest.mark.asyncio
+    async def test_events_endpoint_returns_attendee_display_names(self, auth_headers):
+        """GET /events surfaces attendee display_name/response_status to the client."""
+        from unittest.mock import AsyncMock, patch
+
+        from httpx import ASGITransport, AsyncClient
+
+        from meeting_notes_ai.main import app
+
+        mock_events = [
+            {
+                "id": "event-1",
+                "summary": "Q3 Planning",
+                "description": "",
+                "start": "2026-08-07T10:00:00+02:00",
+                "end": "2026-08-07T11:00:00+02:00",
+                "attendees": [
+                    {
+                        "email": "alice@example.com",
+                        "display_name": "Alice",
+                        "response_status": "accepted",
+                    }
+                ],
+                "location": "",
+                "meet_link": None,
+                "organizer": {"email": "bob@example.com", "display_name": "Bob"},
+                "calendar_id": "primary",
+                "html_link": "",
+            }
+        ]
+
+        with patch(
+            "meeting_notes_ai.routes.google_calendar._load_user_token",
+            new_callable=AsyncMock,
+        ) as mock_load, patch(
+            "meeting_notes_ai.routes.google_calendar._get_calendar_service"
+        ) as mock_svc_cls:
+            mock_token_record = AsyncMock()
+            mock_token_record.encrypted_access_token = "encrypted:at"
+            mock_token_record.encrypted_refresh_token = "encrypted:rt"
+            mock_token_record.token_expires_at = None
+            mock_load.return_value = mock_token_record
+
+            mock_service = mock_svc_cls.return_value
+            mock_service.list_events = AsyncMock(return_value=mock_events)
+
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                resp = await client.get(
+                    "/api/v1/integrations/google-calendar/events",
+                    headers=auth_headers,
+                )
+                assert resp.status_code == 200
+                attendee = resp.json()["events"][0]["attendees"][0]
+                assert attendee["display_name"] == "Alice"
+                assert attendee["response_status"] == "accepted"
+                assert resp.json()["events"][0]["organizer"]["display_name"] == "Bob"
+
+
 class TestEventsErrorHandlingBehavioral:
     """F2: external-call errors in the events endpoint map to clean HTTP codes."""
 

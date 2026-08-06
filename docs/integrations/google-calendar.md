@@ -229,15 +229,15 @@ curl "http://127.0.0.1:8000/api/v1/integrations/google-calendar/events?days=7" \
       "attendees": [
         {
           "email": "alice@example.com",
-          "display_name": "",
-          "response_status": ""
+          "display_name": "Alice",
+          "response_status": "accepted"
         }
       ],
       "location": "Conference Room A",
       "meet_link": "https://meet.google.com/abc-defg-hij",
       "organizer": {
         "email": "bob@example.com",
-        "display_name": ""
+        "display_name": "Bob"
       },
       "calendar_id": "primary",
       "html_link": "https://calendar.google.com/calendar/event?eid=...",
@@ -249,10 +249,10 @@ curl "http://127.0.0.1:8000/api/v1/integrations/google-calendar/events?days=7" \
 }
 ```
 
-> Note: the API serializes attendee fields in snake_case. Google's camelCase
-> `displayName` / `responseStatus` are not mapped onto the Pydantic schema, so
-> `display_name` and `response_status` currently serialize as empty strings
-> even when Google provides them. `email` is always populated.
+> Note: the API serializes attendee and organizer fields in snake_case. Google's
+> camelCase `displayName` / `responseStatus` are mapped onto the Pydantic
+> schema by the calendar service, so `display_name` and `response_status`
+> carry the values Google provides. `email` is always populated.
 
 **Errors:** `409` — Google Calendar not connected; `401` — token expired and
 could not be refreshed (re-authorize); `502` — Google Calendar API

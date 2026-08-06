@@ -287,8 +287,8 @@ class GoogleCalendarService:
             "attendees": [
                 {
                     "email": a.get("email", ""),
-                    "displayName": a.get("displayName", ""),
-                    "responseStatus": a.get("responseStatus", ""),
+                    "display_name": a.get("displayName", ""),
+                    "response_status": a.get("responseStatus", ""),
                 }
                 for a in raw.get("attendees", [])
             ],
@@ -296,7 +296,7 @@ class GoogleCalendarService:
             "meet_link": meet_link,
             "organizer": {
                 "email": raw.get("organizer", {}).get("email", ""),
-                "displayName": raw.get("organizer", {}).get("displayName", ""),
+                "display_name": raw.get("organizer", {}).get("displayName", ""),
             },
             "calendar_id": raw.get("organizer", {}).get("calendarId", "primary"),
             "html_link": raw.get("htmlLink", ""),
