@@ -25,8 +25,74 @@ import pytest
 # Mark all tests in this module as integration (uses TestClient / AsyncClient)
 pytestmark = pytest.mark.integration
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Header
 from pydantic import BaseModel
+
+from meeting_notes_ai.auth import get_current_user
+from meeting_notes_ai.main import app
+
+# ── Auth override fixture (required by all behavioral tests) ──────────────────
+
+_DEFAULT_USER = {
+    "user_id": "test-user-id",
+    "email": "test@example.com",
+    "display_name": "Test User",
+}
+
+
+@pytest.fixture(autouse=True)
+def _mock_auth(_setup_test_db):
+    """Override get_current_user so behavioral tests don't need real JWTs.
+
+    Also ensures the in-memory test DB (session factory) is initialized for
+    every test in this module, since the behavioral tests hit real routes
+    that depend on get_db_session.
+
+    Routes users by the Bearer token so per-user tests work:
+    - "token-user-a" -> user_id "user-a"
+    - "token-user-b" -> user_id "user-b"
+    - anything else   -> _DEFAULT_USER
+    """
+
+    def _fake_get_current_user(
+        authorization: str = Header(default="Bearer test-token"),
+    ) -> dict[str, Any]:
+        token = authorization.removeprefix("Bearer ").strip()
+        if token == "token-user-a":
+            return {"user_id": "user-a", "email": "usera@example.com", "display_name": "User A"}
+        if token == "token-user-b":
+            return {"user_id": "user-b", "email": "userb@example.com", "display_name": "User B"}
+        return _DEFAULT_USER
+
+    app.dependency_overrides[get_current_user] = _fake_get_current_user
+    yield
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture(autouse=True)
+def _mock_token_encryptor(monkeypatch: pytest.MonkeyPatch):
+    """Make TokenEncryptor.decrypt a passthrough for mock tokens."""
+    from meeting_notes_ai.config import settings
+    monkeypatch.setattr(settings, "storage_encryption_key", "test-key-for-calendar-integration")
+    from meeting_notes_ai.services import token_encryption
+
+    original_decrypt = token_encryption.TokenEncryptor.decrypt
+
+    def _passthrough_encrypt(self, plaintext: str) -> str:
+        return f"encrypted:{plaintext}"
+
+    def _passthrough_decrypt(self, token_b64: str) -> str:
+        if token_b64.startswith("encrypted:"):
+            return token_b64[len("encrypted:"):]
+        return original_decrypt(self, token_b64)
+
+    monkeypatch.setattr(
+        token_encryption.TokenEncryptor, "encrypt", _passthrough_encrypt
+    )
+    monkeypatch.setattr(
+        token_encryption.TokenEncryptor, "decrypt", _passthrough_decrypt
+    )
+    yield
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -129,7 +195,8 @@ class TestGoogleCalendarServiceInterface:
         assert isinstance(GoogleCalendarService, type)
 
     def test_service_init_signature(self):
-        """GoogleCalendarService.__init__ accepts client_id, client_secret, redirect_uri, encryptor."""
+        """GoogleCalendarService.__init__ accepts client_id, client_secret,
+        redirect_uri, encryptor."""
         from meeting_notes_ai.services.google_calendar import GoogleCalendarService
 
         sig = signature(GoogleCalendarService.__init__)
@@ -397,7 +464,8 @@ class TestCalendarPydanticSchemasInterface:
         assert issubclass(CalendarStatusResponse, BaseModel)
 
     def test_calendar_status_response_fields(self):
-        """CalendarStatusResponse has connected, calendar_id, connected_at, token_expires_at, needs_reauth fields."""
+        """CalendarStatusResponse has connected, calendar_id, connected_at,
+        token_expires_at, needs_reauth fields."""
         from meeting_notes_ai.routes.google_calendar import CalendarStatusResponse
 
         fields = CalendarStatusResponse.model_fields
@@ -521,13 +589,18 @@ class TestOAuth2AuthorizationURLBehavioral:
 
         from meeting_notes_ai.main import app
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
-            resp = await client.post(
-                "/api/v1/integrations/google-calendar/auth",
-            )
-            assert resp.status_code in (401, 403)
+        # Temporarily clear auth override to test real auth behavior
+        app.dependency_overrides.clear()
+        try:
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                resp = await client.post(
+                    "/api/v1/integrations/google-calendar/auth",
+                )
+                assert resp.status_code in (401, 403)
+        finally:
+            app.dependency_overrides[get_current_user] = lambda: _DEFAULT_USER
 
 
 class TestOAuth2CallbackBehavioral:
@@ -684,8 +757,8 @@ class TestEventListingBehavioral:
             "meeting_notes_ai.routes.google_calendar._get_calendar_service"
         ) as mock_svc_cls:
             mock_token_record = AsyncMock()
-            mock_token_record.encrypted_access_token = "encrypted-at"
-            mock_token_record.encrypted_refresh_token = "encrypted-rt"
+            mock_token_record.encrypted_access_token = "encrypted:at"
+            mock_token_record.encrypted_refresh_token = "encrypted:rt"
             mock_token_record.token_expires_at = None
             mock_load.return_value = mock_token_record
 
@@ -729,13 +802,13 @@ class TestEventListingBehavioral:
             "meeting_notes_ai.routes.google_calendar._get_calendar_service"
         ) as mock_svc_cls:
             mock_token_record = AsyncMock()
-            mock_token_record.encrypted_access_token = "encrypted-at"
-            mock_token_record.encrypted_refresh_token = "encrypted-rt"
+            mock_token_record.encrypted_access_token = "encrypted:at"
+            mock_token_record.encrypted_refresh_token = "encrypted:rt"
             mock_token_record.token_expires_at = None
             mock_load.return_value = mock_token_record
 
             mock_service = mock_svc_cls.return_value
-            mock_service.list_events = AsyncMock(return_value=[])
+            mock_service.list_events = AsyncMock(return_value=[])  # empty for import tests
 
             async with AsyncClient(
                 transport=ASGITransport(app=app), base_url="http://test"
@@ -789,8 +862,8 @@ class TestEventListingBehavioral:
             return_value={"imported-event"},
         ):
             mock_token_record = AsyncMock()
-            mock_token_record.encrypted_access_token = "encrypted-at"
-            mock_token_record.encrypted_refresh_token = "encrypted-rt"
+            mock_token_record.encrypted_access_token = "encrypted:at"
+            mock_token_record.encrypted_refresh_token = "encrypted:rt"
             mock_token_record.token_expires_at = None
             mock_load.return_value = mock_token_record
 
@@ -902,8 +975,8 @@ class TestCalendarImportBehavioral:
             return_value={"already-imported-event"},
         ):
             mock_token_record = AsyncMock()
-            mock_token_record.encrypted_access_token = "encrypted-at"
-            mock_token_record.encrypted_refresh_token = "encrypted-rt"
+            mock_token_record.encrypted_access_token = "encrypted:at"
+            mock_token_record.encrypted_refresh_token = "encrypted:rt"
             mock_load.return_value = mock_token_record
 
             async with AsyncClient(
@@ -979,13 +1052,13 @@ class TestTenantIsolationBehavioral:
             "meeting_notes_ai.routes.google_calendar._get_calendar_service"
         ) as mock_svc_cls:
             mock_token_a = AsyncMock()
-            mock_token_a.encrypted_access_token = "encrypted-a-at"
-            mock_token_a.encrypted_refresh_token = "encrypted-a-rt"
+            mock_token_a.encrypted_access_token = "encrypted:a-at"
+            mock_token_a.encrypted_refresh_token = "encrypted:a-rt"
             mock_token_a.token_expires_at = None
 
             mock_token_b = AsyncMock()
-            mock_token_b.encrypted_access_token = "encrypted-b-at"
-            mock_token_b.encrypted_refresh_token = "encrypted-b-rt"
+            mock_token_b.encrypted_access_token = "encrypted:b-at"
+            mock_token_b.encrypted_refresh_token = "encrypted:b-rt"
             mock_token_b.token_expires_at = None
 
             # Different tokens for different users
@@ -994,10 +1067,13 @@ class TestTenantIsolationBehavioral:
             )
 
             mock_service = mock_svc_cls.return_value
+            # Make the mock service's encryptor decrypt to real strings
+            # so the events endpoint's token-decryption works correctly
+            mock_service.encryptor.decrypt = lambda token: token.replace("encrypted:", "")
             # User A gets their events, User B gets empty
             mock_service.list_events = AsyncMock(
                 side_effect=lambda **kwargs: user_a_events
-                if kwargs.get("access_token") == "encrypted-a-at"
+                if kwargs.get("access_token") == "a-at"
                 else []
             )
 
@@ -1049,14 +1125,13 @@ class TestTokenRefreshBehavioral:
     @pytest.mark.asyncio
     async def test_expired_token_triggers_refresh(self):
         """Events endpoint refreshes token when token_expires_at is in the past."""
+        # Token expired 1 hour ago
+        from datetime import timedelta
         from unittest.mock import AsyncMock, patch
 
         from httpx import ASGITransport, AsyncClient
 
         from meeting_notes_ai.main import app
-
-        # Token expired 1 hour ago
-        from datetime import timedelta
 
         expired_time = datetime.now(timezone.utc) - timedelta(hours=1)
 
@@ -1098,13 +1173,12 @@ class TestTokenRefreshBehavioral:
     @pytest.mark.asyncio
     async def test_valid_token_skips_refresh(self):
         """Events endpoint does NOT refresh token when token_expires_at is in the future."""
+        from datetime import timedelta
         from unittest.mock import AsyncMock, patch
 
         from httpx import ASGITransport, AsyncClient
 
         from meeting_notes_ai.main import app
-
-        from datetime import timedelta
 
         future_time = datetime.now(timezone.utc) + timedelta(hours=1)
 

@@ -184,6 +184,15 @@ class Meeting(Base, TimestampMixin):
     decisions: Mapped[str] = mapped_column(Text, nullable=True)  # JSON
     key_points: Mapped[str] = mapped_column(Text, nullable=True)  # JSON
     metadata_json: Mapped[str] = mapped_column(Text, nullable=True)  # JSON
+    google_calendar_event_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True, index=True, unique=True
+    )
+    google_calendar_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    source: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="upload"
+    )
 
     # Relationships
     user: Mapped["User"] = relationship(back_populates="meetings")
@@ -358,3 +367,66 @@ class LiveSessionRecord(Base, TimestampMixin):
     retention_days: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     hipaa: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     phi_classification: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+
+
+# ── Google Calendar Integration ──────────────────────────────────────────────
+
+
+class GoogleCalendarToken(Base, TimestampMixin):
+    """Encrypted OAuth2 tokens for Google Calendar integration.
+
+    One row per user. Tokens are encrypted with AES-256-GCM via
+    TokenEncryptor before storage. The refresh_token is encrypted
+    separately because it's the long-lived credential.
+
+    Access tokens expire after 1 hour; the service layer handles
+    transparent refresh using the stored refresh_token.
+    """
+
+    __tablename__ = "google_calendar_tokens"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id"), unique=True, nullable=False, index=True
+    )
+    encrypted_access_token: Mapped[str] = mapped_column(Text, nullable=False)
+    encrypted_refresh_token: Mapped[str] = mapped_column(Text, nullable=False)
+    token_expires_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    scope: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    calendar_id: Mapped[str] = mapped_column(
+        String(255), nullable=False, default="primary"
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    disconnected_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    # Relationships
+    user: Mapped["User"] = relationship()
+
+
+class OAuthState(Base, TimestampMixin):
+    """Short-lived OAuth2 CSRF state tokens.
+
+    States expire after 10 minutes and are cleaned up on read.
+    """
+
+    __tablename__ = "oauth_states"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    state_token: Mapped[str] = mapped_column(
+        String(100), unique=True, nullable=False, index=True
+    )
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id"), nullable=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    used: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

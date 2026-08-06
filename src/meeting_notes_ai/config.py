@@ -78,6 +78,20 @@ class Settings:
         default_factory=lambda: int(os.getenv("RETENTION_SWEEP_INTERVAL_SECONDS", "86400"))
     )
 
+    # ── Google Calendar Integration ─────────────────────────────────────────
+    google_calendar_client_id: str = field(
+        default_factory=lambda: os.getenv("GOOGLE_CALENDAR_CLIENT_ID", "")
+    )
+    google_calendar_client_secret: str = field(
+        default_factory=lambda: os.getenv("GOOGLE_CALENDAR_CLIENT_SECRET", "")
+    )
+    google_calendar_redirect_uri: str = field(
+        default_factory=lambda: os.getenv(
+            "GOOGLE_CALENDAR_REDIRECT_URI",
+            "http://localhost:8000/api/v1/integrations/google-calendar/callback",
+        )
+    )
+
     # Shared patterns reference
     RAILWAY_HEALTHCHECK_PATH: str = "/healthz"
 
