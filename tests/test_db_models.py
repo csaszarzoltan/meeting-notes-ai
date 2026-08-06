@@ -351,6 +351,58 @@ async def test_session_crud():
 
 
 @pytest.mark.asyncio
+async def test_inmemory_engine_concurrent_sessions_share_database():
+    """Concurrent sessions on an in-memory engine see the same database.
+
+    Regression: in-memory aiosqlite without StaticPool gives every pooled
+    connection its own private (empty) database, so a second concurrent
+    session fails with "no such table" — the source of flaky full-suite
+    runs under TestClient/xdist (see create_db_engine).
+    """
+    from uuid import uuid4
+
+    from meeting_notes_ai.db.engine import (
+        close_db,
+        create_db_engine,
+        create_session_factory,
+    )
+    from meeting_notes_ai.db.models import Base, User
+
+    engine = create_db_engine("sqlite+aiosqlite://", echo=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    factory = create_session_factory(engine)
+    user_id = str(uuid4())
+
+    # Hold connection 1 open while a second session checks out a connection:
+    # with the default pool that second connection is a fresh empty DB.
+    async with factory() as session_a:
+        session_a.add(
+            User(
+                id=user_id,
+                email="concurrent@example.com",
+                hashed_password="hash",
+                display_name="Concurrent",
+            )
+        )
+        await session_a.commit()
+
+        async with factory() as session_b:
+            from sqlalchemy import select
+
+            result = await session_b.execute(
+                select(User).where(User.id == user_id)
+            )
+            loaded = result.scalar_one_or_none()
+            assert loaded is not None, (
+                "second concurrent session must share the in-memory database"
+            )
+
+    await close_db(engine)
+
+
+@pytest.mark.asyncio
 async def test_get_db_session_runtime_error_without_init():
     """get_db_session raises RuntimeError before factory is set."""
     from meeting_notes_ai.db.session import get_db_session

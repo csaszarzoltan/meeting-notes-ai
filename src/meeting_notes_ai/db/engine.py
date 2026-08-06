@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy.pool import StaticPool
 
 from meeting_notes_ai.db.models import Base
 
@@ -21,8 +24,22 @@ def create_db_engine(database_url: str, echo: bool = False) -> AsyncEngine:
 
     Returns:
         Configured AsyncEngine instance.
+
+    In-memory SQLite (``sqlite+aiosqlite://``) uses a single shared connection
+    (StaticPool). Without it each pooled connection gets its own private,
+    empty database, so concurrent sessions fail with "no such table" — the
+    source of the flaky full-suite runs under TestClient/xdist.
     """
-    return create_async_engine(database_url, echo=echo)
+    scheme, _, rest = database_url.partition("://")
+    is_memory_sqlite = scheme.startswith("sqlite") and rest.strip("/") in (
+        "",
+        ":memory:",
+    )
+    kwargs: dict[str, Any] = {"echo": echo}
+    if is_memory_sqlite:
+        kwargs["poolclass"] = StaticPool
+        kwargs["connect_args"] = {"check_same_thread": False}
+    return create_async_engine(database_url, **kwargs)
 
 
 def create_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
