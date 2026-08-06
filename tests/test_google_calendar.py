@@ -711,6 +711,67 @@ class TestOAuth2CallbackBehavioral:
                 assert "sensitive-refresh-token" not in body
 
 
+class TestOAuthStatePurgeBehavioral:
+    """F5: expired/used OAuthState rows are purged on read (verify)."""
+
+    @pytest.mark.asyncio
+    async def test_verify_oauth_state_purges_expired_and_used_rows(self):
+        """Verifying a state consumes it and purges expired/used rows on read."""
+        from datetime import timedelta
+
+        from sqlalchemy import select
+
+        from meeting_notes_ai.db.models import OAuthState
+        from meeting_notes_ai.db.session import _session_factory
+        from meeting_notes_ai.routes.google_calendar import _verify_oauth_state
+
+        now = datetime.now(timezone.utc)
+
+        async with _session_factory() as session:
+            session.add_all(
+                [
+                    OAuthState(
+                        state_token="used-state-f5",
+                        user_id="test-user-id",
+                        expires_at=now + timedelta(minutes=5),
+                        used=True,
+                    ),
+                    OAuthState(
+                        state_token="expired-state-f5",
+                        user_id="test-user-id",
+                        expires_at=now - timedelta(minutes=5),
+                        used=False,
+                    ),
+                    OAuthState(
+                        state_token="fresh-unused-f5",
+                        user_id="test-user-id",
+                        expires_at=now + timedelta(minutes=5),
+                        used=False,
+                    ),
+                    OAuthState(
+                        state_token="valid-state-f5",
+                        user_id="test-user-id",
+                        expires_at=now + timedelta(minutes=5),
+                        used=False,
+                    ),
+                ]
+            )
+            await session.commit()
+
+            # Verifying a valid state consumes it and purges used/expired rows
+            user_id = await _verify_oauth_state("valid-state-f5", session)
+            assert user_id == "test-user-id"
+            await session.commit()
+
+            remaining = (
+                await session.execute(select(OAuthState.state_token))
+            ).scalars().all()
+            assert "used-state-f5" not in remaining
+            assert "expired-state-f5" not in remaining
+            assert "valid-state-f5" not in remaining  # consumed on read
+            assert "fresh-unused-f5" in remaining  # untouched states survive
+
+
 class TestEventListingBehavioral:
     """Test event listing returns upcoming 7-day events."""
 
@@ -883,6 +944,88 @@ class TestEventListingBehavioral:
                 assert events[0]["imported"] is True
 
 
+class TestEventsErrorHandlingBehavioral:
+    """F2: external-call errors in the events endpoint map to clean HTTP codes."""
+
+    @pytest.fixture
+    def auth_headers(self):
+        return {"Authorization": "Bearer test-token"}
+
+    def _mock_token_record(self):
+        from unittest.mock import AsyncMock
+
+        mock_token = AsyncMock()
+        mock_token.encrypted_access_token = "encrypted:at"
+        mock_token.encrypted_refresh_token = "encrypted:rt"
+        mock_token.token_expires_at = None
+        return mock_token
+
+    @pytest.mark.asyncio
+    async def test_events_endpoint_returns_401_on_token_expired(self, auth_headers):
+        """GET /events maps TokenExpiredError from list_events to 401."""
+        from unittest.mock import AsyncMock, patch
+
+        from httpx import ASGITransport, AsyncClient
+
+        from meeting_notes_ai.main import app
+        from meeting_notes_ai.services.google_calendar import TokenExpiredError
+
+        with patch(
+            "meeting_notes_ai.routes.google_calendar._load_user_token",
+            new_callable=AsyncMock,
+            return_value=self._mock_token_record(),
+        ), patch(
+            "meeting_notes_ai.routes.google_calendar._get_calendar_service"
+        ) as mock_svc_cls:
+            mock_service = mock_svc_cls.return_value
+            mock_service.list_events = AsyncMock(
+                side_effect=TokenExpiredError("token revoked")
+            )
+
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                resp = await client.get(
+                    "/api/v1/integrations/google-calendar/events",
+                    headers=auth_headers,
+                )
+                assert resp.status_code == 401
+                assert "re-authorize" in resp.json()["detail"].lower()
+
+    @pytest.mark.asyncio
+    async def test_events_endpoint_returns_502_on_calendar_error(self, auth_headers):
+        """GET /events maps GoogleCalendarError from list_events to 502 (not 500)."""
+        from unittest.mock import AsyncMock, patch
+
+        from httpx import ASGITransport, AsyncClient
+
+        from meeting_notes_ai.main import app
+        from meeting_notes_ai.services.google_calendar import GoogleCalendarError
+
+        with patch(
+            "meeting_notes_ai.routes.google_calendar._load_user_token",
+            new_callable=AsyncMock,
+            return_value=self._mock_token_record(),
+        ), patch(
+            "meeting_notes_ai.routes.google_calendar._get_calendar_service"
+        ) as mock_svc_cls:
+            mock_service = mock_svc_cls.return_value
+            mock_service.list_events = AsyncMock(
+                side_effect=GoogleCalendarError("api down")
+            )
+
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                resp = await client.get(
+                    "/api/v1/integrations/google-calendar/events",
+                    headers=auth_headers,
+                )
+                assert resp.status_code == 502
+                # No raw exception text leaks into the detail
+                assert "api down" not in resp.text
+
+
 class TestCalendarImportBehavioral:
     """Test import endpoint creates a meeting record from a calendar event."""
 
@@ -1012,6 +1155,238 @@ class TestCalendarImportBehavioral:
                 )
                 assert resp.status_code == 409
                 assert "connected" in resp.json()["detail"].lower()
+
+
+class TestSharedCalendarImportBehavioral:
+    """F1: event import uniqueness is per (user_id, event_id) — no raw 500.
+
+    Regression: user A imports event X -> 201; user B importing the SAME
+    event X from a shared calendar -> 409, not the unhandled IntegrityError 500.
+    """
+
+    @pytest.mark.asyncio
+    async def test_shared_event_second_user_import_returns_409(self):
+        """User A imports event X; user B importing the same event gets 409."""
+        from unittest.mock import AsyncMock, patch
+
+        from httpx import ASGITransport, AsyncClient
+
+        from meeting_notes_ai.auth import get_current_user
+        from meeting_notes_ai.main import app
+
+        mock_event = {
+            "id": "shared-event-f1",
+            "summary": "Shared Team Sync",
+            "description": "",
+            "start": "2026-08-07T10:00:00+02:00",
+            "end": "2026-08-07T11:00:00+02:00",
+            "attendees": [],
+            "location": "",
+            "meet_link": None,
+            "organizer": {"email": "", "displayName": ""},
+            "calendar_id": "primary",
+            "html_link": "",
+        }
+        mock_token = AsyncMock()
+        mock_token.encrypted_access_token = "encrypted:at"
+        mock_token.encrypted_refresh_token = "encrypted:rt"
+        mock_token.token_expires_at = None
+
+        original_override = app.dependency_overrides.get(get_current_user)
+
+        with patch(
+            "meeting_notes_ai.routes.google_calendar._load_user_token",
+            new_callable=AsyncMock,
+            return_value=mock_token,
+        ), patch(
+            "meeting_notes_ai.routes.google_calendar._get_calendar_service"
+        ) as mock_svc_cls:
+            mock_service = mock_svc_cls.return_value
+            mock_service.get_event = AsyncMock(return_value=mock_event)
+
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                # User A (default override -> test-user-id) imports the event
+                resp_a = await client.post(
+                    "/api/v1/integrations/google-calendar/import/shared-event-f1",
+                    headers={"Authorization": "Bearer test-token"},
+                )
+                assert resp_a.status_code == 201
+
+                # User B (other-user-id) tries to import the SAME event
+                app.dependency_overrides[get_current_user] = lambda: {
+                    "user_id": "other-user-id",
+                    "email": "other@example.com",
+                    "display_name": "Other User",
+                }
+                try:
+                    resp_b = await client.post(
+                        "/api/v1/integrations/google-calendar/import/shared-event-f1",
+                        headers={"Authorization": "Bearer test-token"},
+                    )
+                finally:
+                    if original_override is not None:
+                        app.dependency_overrides[get_current_user] = original_override
+                    else:
+                        app.dependency_overrides.pop(get_current_user, None)
+
+                # The shared-calendar duplicate must be a clean 409, never a 500
+                assert resp_b.status_code == 409
+                assert "already" in resp_b.json()["detail"].lower()
+
+    @pytest.mark.asyncio
+    async def test_duplicate_import_hits_db_constraint_returns_409(self):
+        """A same-user import race reaching the DB constraint returns 409 (not 500)."""
+        from unittest.mock import AsyncMock, patch
+
+        from httpx import ASGITransport, AsyncClient
+
+        from meeting_notes_ai.main import app
+
+        mock_event = {
+            "id": "race-event-f1",
+            "summary": "Race Event",
+            "description": "",
+            "start": "2026-08-07T10:00:00+02:00",
+            "end": "2026-08-07T11:00:00+02:00",
+            "attendees": [],
+            "location": "",
+            "meet_link": None,
+            "organizer": {"email": "", "displayName": ""},
+            "calendar_id": "primary",
+            "html_link": "",
+        }
+        mock_token = AsyncMock()
+        mock_token.encrypted_access_token = "encrypted:at"
+        mock_token.encrypted_refresh_token = "encrypted:rt"
+        mock_token.token_expires_at = None
+
+        with patch(
+            "meeting_notes_ai.routes.google_calendar._get_imported_event_ids",
+            new_callable=AsyncMock,
+            return_value=set(),
+        ), patch(
+            "meeting_notes_ai.routes.google_calendar._event_imported_by_any_user",
+            new_callable=AsyncMock,
+            return_value=False,
+        ), patch(
+            "meeting_notes_ai.routes.google_calendar._load_user_token",
+            new_callable=AsyncMock,
+            return_value=mock_token,
+        ), patch(
+            "meeting_notes_ai.routes.google_calendar._get_calendar_service"
+        ) as mock_svc_cls:
+            mock_service = mock_svc_cls.return_value
+            mock_service.get_event = AsyncMock(return_value=mock_event)
+
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                headers = {"Authorization": "Bearer test-token"}
+                # First import inserts the meeting row (real DB)
+                resp1 = await client.post(
+                    "/api/v1/integrations/google-calendar/import/race-event-f1",
+                    headers=headers,
+                )
+                assert resp1.status_code == 201
+                # Second import: app-level checks are bypassed (simulated race)
+                # so the composite unique constraint fires -> 409, never a 500
+                resp2 = await client.post(
+                    "/api/v1/integrations/google-calendar/import/race-event-f1",
+                    headers=headers,
+                )
+                assert resp2.status_code == 409
+
+
+class TestImportErrorHandlingBehavioral:
+    """F4: import endpoint distinguishes token expiry (401) from API errors (404)."""
+
+    @pytest.fixture
+    def auth_headers(self):
+        return {"Authorization": "Bearer test-token"}
+
+    def _mock_token_record(self):
+        from unittest.mock import AsyncMock
+
+        mock_token = AsyncMock()
+        mock_token.encrypted_access_token = "encrypted:at"
+        mock_token.encrypted_refresh_token = "encrypted:rt"
+        return mock_token
+
+    @pytest.mark.asyncio
+    async def test_import_returns_401_on_token_expired(self, auth_headers):
+        """POST /import maps TokenExpiredError from get_event to 401 (not 404)."""
+        from unittest.mock import AsyncMock, patch
+
+        from httpx import ASGITransport, AsyncClient
+
+        from meeting_notes_ai.main import app
+        from meeting_notes_ai.services.google_calendar import TokenExpiredError
+
+        with patch(
+            "meeting_notes_ai.routes.google_calendar._get_imported_event_ids",
+            new_callable=AsyncMock,
+            return_value=set(),
+        ), patch(
+            "meeting_notes_ai.routes.google_calendar._load_user_token",
+            new_callable=AsyncMock,
+            return_value=self._mock_token_record(),
+        ), patch(
+            "meeting_notes_ai.routes.google_calendar._get_calendar_service"
+        ) as mock_svc_cls:
+            mock_service = mock_svc_cls.return_value
+            mock_service.get_event = AsyncMock(
+                side_effect=TokenExpiredError("token revoked")
+            )
+
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                resp = await client.post(
+                    "/api/v1/integrations/google-calendar/import/evt-token-expired",
+                    headers=auth_headers,
+                )
+                assert resp.status_code == 401
+                assert "re-authorize" in resp.json()["detail"].lower()
+
+    @pytest.mark.asyncio
+    async def test_import_returns_404_without_leaking_error(self, auth_headers):
+        """POST /import maps GoogleCalendarError to 404 with a generic detail."""
+        from unittest.mock import AsyncMock, patch
+
+        from httpx import ASGITransport, AsyncClient
+
+        from meeting_notes_ai.main import app
+        from meeting_notes_ai.services.google_calendar import GoogleCalendarError
+
+        with patch(
+            "meeting_notes_ai.routes.google_calendar._get_imported_event_ids",
+            new_callable=AsyncMock,
+            return_value=set(),
+        ), patch(
+            "meeting_notes_ai.routes.google_calendar._load_user_token",
+            new_callable=AsyncMock,
+            return_value=self._mock_token_record(),
+        ), patch(
+            "meeting_notes_ai.routes.google_calendar._get_calendar_service"
+        ) as mock_svc_cls:
+            mock_service = mock_svc_cls.return_value
+            mock_service.get_event = AsyncMock(
+                side_effect=GoogleCalendarError("secret-detail-xyz")
+            )
+
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                resp = await client.post(
+                    "/api/v1/integrations/google-calendar/import/evt-missing",
+                    headers=auth_headers,
+                )
+                assert resp.status_code == 404
+                detail = resp.json()["detail"]
+                assert "secret-detail-xyz" not in resp.text  # no raw error echo
+                assert "calendar event" in detail.lower()
 
 
 class TestTenantIsolationBehavioral:

@@ -9,7 +9,7 @@
 - Real workspace search: Cmd/Ctrl+K queries private meeting title, summary, transcript, tags, and decisions and supports Arrow/Enter keyboard operation
 - Real review playback controls: desktop and mobile controls use the audio element and evidence navigation seeks to source timestamps
 - Authenticated product shell: AuthGate is mounted and the workspace client and upload processing requests send the session JWT
-- Honest capture availability: calendar and in-person preview modes are disabled until implemented
+- Honest capture availability: Google Calendar import is live (OAuth connect + one-click event import); in-person preview mode remains disabled until implemented
 - Review remediation tests: security, tenant isolation, full create-review-share-revoke integration, UI wiring, and real filesystem persistence are covered
 ## Sources
 - research-findings.md items addressed: unified product workflow, source-linked review, review-before-share, tenant isolation, safe sharing, action execution, truthful compliance, global search

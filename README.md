@@ -2,8 +2,6 @@
 
 MeetingNotesAI is a privacy-first FastAPI and React workspace that turns uploaded or live conversations into **reviewable evidence, approved notes, accountable actions, and controlled shares**.
 
-## Why this release
-
 `research-findings.md` identified three highest-value requirements: one coherent meeting workflow, source-linked human review, and policy-driven safe execution. Version 1.1.2 closes the independent QA blockers around authentication, tenant isolation, canonical meeting persistence, review/approval, sharing, task queueing, compliance evidence, search, and real audio controls.
 
 ## Stack
@@ -33,6 +31,18 @@ Open `http://127.0.0.1:8000/app`. Create an account through `POST /api/v1/auth/s
 6. Confirm owners and deadlines; configured external adapters receive queued work.
 7. Create an expiring share only after approval, inspect access, and revoke immediately when needed.
 8. Find prior work through Cmd/Ctrl+K workspace search.
+
+## Google Calendar integration
+
+Connect a Google account through OAuth2, browse upcoming events, and import a meeting in one click to create a tenant-scoped meeting record:
+
+- `POST /api/v1/integrations/google-calendar/auth` — start the OAuth2 flow (calendar.readonly scope, CSRF state token)
+- `GET /api/v1/integrations/google-calendar/callback` — exchange the authorization code and store encrypted tokens
+- `GET /api/v1/integrations/google-calendar/events` — list the next 7 days of events, marking already-imported ones
+- `POST /api/v1/integrations/google-calendar/import/{event_id}` — create a meeting from a calendar event (409 on duplicate import)
+- `GET /api/v1/integrations/google-calendar/status` and `DELETE /api/v1/integrations/google-calendar/disconnect` — manage the connection
+
+Tokens are encrypted at rest (AES-256-GCM) and refreshed automatically; expired or revoked tokens surface a re-authorization prompt instead of a raw error.
 
 ## Security model
 

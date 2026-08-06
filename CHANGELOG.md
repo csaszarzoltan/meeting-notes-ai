@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.1.2] — 2026-08-06
+
+### Fixed
+- Google Calendar import: uniqueness is now per (user, event); importing a shared-calendar event already imported by another user returns 409 instead of an unhandled 500. Added a composite unique index via migration 20260806_0005.
+- Google Calendar events endpoint maps token expiry to 401 and upstream API failures to 502 (previously raw 500s).
+- Google Calendar import endpoint distinguishes token expiry (401) from a missing event (404) without echoing raw Google API error text.
+- OAuth state rows are purged once used or expired instead of accumulating forever.
+- Removed the dead `calendar_connected` frontend query-param handling; the OAuth flow completes via the status poll.
+
+---
+
 ## [1.1.0] — 2026-08-05
 
 ### Modern GUI redesign

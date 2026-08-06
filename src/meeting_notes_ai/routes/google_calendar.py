@@ -15,7 +15,8 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import delete, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from meeting_notes_ai.auth import get_current_user
@@ -154,7 +155,11 @@ async def _store_oauth_state(state: str, user_id: str, db: AsyncSession) -> None
 
 
 async def _verify_oauth_state(state: str, db: AsyncSession) -> str | None:
-    """Verify and consume an OAuth state token. Returns user_id or None."""
+    """Verify and consume an OAuth state token. Returns user_id or None.
+
+    Expired and already-used state rows are purged on read so the
+    ``oauth_states`` table does not accumulate stale CSRF tokens.
+    """
     result = await db.execute(
         select(OAuthState).where(
             OAuthState.state_token == state,
@@ -162,13 +167,30 @@ async def _verify_oauth_state(state: str, db: AsyncSession) -> str | None:
         )
     )
     record = result.scalar_one_or_none()
-    if not record:
-        return None
-    if record.expires_at <= datetime.now(timezone.utc):
-        return None
-    record.used = True
+    user_id = None
+    if record is not None:
+        # SQLite round-trips DateTime(timezone=True) as naive UTC
+        expires_at = record.expires_at
+        if expires_at.tzinfo is not None:
+            expires_at = expires_at.replace(tzinfo=None)
+        if expires_at > datetime.now(timezone.utc).replace(tzinfo=None):
+            record.used = True
+            user_id = record.user_id
+    await _purge_oauth_states(db)
     await db.flush()
-    return record.user_id
+    return user_id
+
+
+async def _purge_oauth_states(db: AsyncSession) -> None:
+    """Delete expired and already-consumed OAuth state rows."""
+    await db.execute(
+        delete(OAuthState).where(
+            or_(
+                OAuthState.used.is_(True),
+                OAuthState.expires_at <= datetime.now(timezone.utc).replace(tzinfo=None),
+            )
+        )
+    )
 
 
 async def _load_user_token(
@@ -193,6 +215,20 @@ async def _get_imported_event_ids(db: AsyncSession, user_id: str) -> set[str]:
         )
     )
     return {row[0] for row in result.all() if row[0]}
+
+
+async def _event_imported_by_any_user(db: AsyncSession, event_id: str) -> bool:
+    """Return True if a calendar event was already imported by any user.
+
+    Shared/team calendars surface the same event to several users; the event
+    is imported once and further import attempts get a clean 409 (see F1).
+    """
+    result = await db.execute(
+        select(Meeting.id)
+        .where(Meeting.google_calendar_event_id == event_id)
+        .limit(1)
+    )
+    return result.scalar_one_or_none() is not None
 
 
 # ── Endpoints ────────────────────────────────────────────────────────────────
@@ -304,10 +340,10 @@ async def list_calendar_events(
     access_token = encryptor.decrypt(token_record.encrypted_access_token)
     refresh_token = encryptor.decrypt(token_record.encrypted_refresh_token)
 
-    # Auto-refresh if token is expired
-    if (
-        token_record.token_expires_at
-        and token_record.token_expires_at <= datetime.now(timezone.utc)
+    # Auto-refresh if token is expired (SQLite round-trips tz-aware as naive UTC)
+    if token_record.token_expires_at and (
+        token_record.token_expires_at.replace(tzinfo=None)
+        <= datetime.now(timezone.utc).replace(tzinfo=None)
     ):
         try:
             refreshed = await service.refresh_token(refresh_token)
@@ -324,12 +360,24 @@ async def list_calendar_events(
                 detail="Google token expired. Please re-authorize.",
             )
 
-    events = await service.list_events(
-        access_token=access_token,
-        refresh_token=refresh_token,
-        calendar_id=calendar_id,
-        days_ahead=days,
-    )
+    try:
+        events = await service.list_events(
+            access_token=access_token,
+            refresh_token=refresh_token,
+            calendar_id=calendar_id,
+            days_ahead=days,
+        )
+    except TokenExpiredError:
+        raise HTTPException(
+            status_code=401,
+            detail="Google token expired. Please re-authorize.",
+        )
+    except GoogleCalendarError:
+        logger.warning("Google Calendar events request failed for user %s", user["user_id"])
+        raise HTTPException(
+            status_code=502,
+            detail="Google Calendar is temporarily unavailable. Please try again later.",
+        )
 
     # Mark already-imported events
     imported_ids = await _get_imported_event_ids(db, user["user_id"])
@@ -355,9 +403,15 @@ async def import_calendar_event(
     Returns 409 if the event has already been imported or the user
     has no connected Google Calendar.
     """
-    # Check for duplicate import using the helper
+    # Check for duplicate import using the helper (per-user semantics)
     imported_ids = await _get_imported_event_ids(db, user["user_id"])
     if event_id in imported_ids:
+        raise HTTPException(
+            status_code=409, detail="This event has already been imported"
+        )
+
+    # Shared/team calendars: the event may already be imported by another user
+    if await _event_imported_by_any_user(db, event_id):
         raise HTTPException(
             status_code=409, detail="This event has already been imported"
         )
@@ -381,9 +435,16 @@ async def import_calendar_event(
             calendar_id=calendar_id,
             event_id=event_id,
         )
-    except GoogleCalendarError as exc:
+    except TokenExpiredError:
         raise HTTPException(
-            status_code=404, detail=f"Calendar event not found: {exc}"
+            status_code=401,
+            detail="Google token expired. Please re-authorize.",
+        )
+    except GoogleCalendarError:
+        # Generic detail: never echo the raw Google API error (it may contain
+        # user-supplied calendar/event identifiers).
+        raise HTTPException(
+            status_code=404, detail="Calendar event not found"
         )
 
     # Build meeting record
@@ -410,7 +471,14 @@ async def import_calendar_event(
     )
 
     db.add(meeting)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError:
+        # Concurrent same-user import raced past the app-level checks and hit
+        # the (user_id, google_calendar_event_id) constraint -> clean 409.
+        raise HTTPException(
+            status_code=409, detail="This event has already been imported"
+        ) from None
 
     # Build duration string
     duration = ""

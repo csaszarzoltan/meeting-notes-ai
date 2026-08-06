@@ -20,6 +20,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -171,6 +172,18 @@ class TeamMember(Base, TimestampMixin):
 class Meeting(Base, TimestampMixin):
     __tablename__ = "meetings"
 
+    # Uniqueness is per (user_id, google_calendar_event_id): two users sharing
+    # a calendar may each import the same event, but a single user must never
+    # import the same event twice. The composite constraint backs up the
+    # app-level per-user duplicate check against concurrent imports.
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "google_calendar_event_id",
+            name="uq_meetings_user_google_calendar_event",
+        ),
+    )
+
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     title: Mapped[str] = mapped_column(String(300), nullable=True)
     user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False)
@@ -185,7 +198,7 @@ class Meeting(Base, TimestampMixin):
     key_points: Mapped[str] = mapped_column(Text, nullable=True)  # JSON
     metadata_json: Mapped[str] = mapped_column(Text, nullable=True)  # JSON
     google_calendar_event_id: Mapped[Optional[str]] = mapped_column(
-        String(255), nullable=True, index=True, unique=True
+        String(255), nullable=True
     )
     google_calendar_id: Mapped[Optional[str]] = mapped_column(
         String(255), nullable=True
