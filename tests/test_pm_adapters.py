@@ -17,9 +17,9 @@ import inspect
 from dataclasses import is_dataclass
 from typing import Any
 
+import httpx
 import pytest
 import respx
-import httpx
 
 from meeting_notes_ai.services.integrations import (
     PM_PROVIDERS,
@@ -466,7 +466,11 @@ def mock_jira_create_task(router: respx.Router, auth: AdapterAuth) -> None:
     router.post(f"{auth.site_url.rstrip('/')}/rest/api/3/issue").mock(
         return_value=httpx.Response(
             201,
-            json={"id": "10001", "key": "ACME-123", "self": f"{auth.site_url.rstrip('/')}/rest/api/3/issue/10001"},
+            json={
+                "id": "10001",
+                "key": "ACME-123",
+                "self": f"{auth.site_url.rstrip('/')}/rest/api/3/issue/10001",
+            },
         )
     )
 
