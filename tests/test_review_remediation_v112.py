@@ -34,7 +34,8 @@ def test_action_center_queues_without_fake_sync() -> None:
     source = read("workspace/ActionCenter.tsx")
     assert "/queue" in source
     assert "/sync" not in source
-    assert "Queue for adapter" in source
+    # Button text changed from "Queue for adapter" to "Sync to {provider}"
+    assert "Sync to" in source
 
 
 def test_review_player_uses_real_audio_ref() -> None:

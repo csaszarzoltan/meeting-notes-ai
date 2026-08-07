@@ -18,6 +18,8 @@ from dataclasses import is_dataclass
 from typing import Any
 
 import pytest
+import respx
+import httpx
 
 from meeting_notes_ai.services.integrations import (
     PM_PROVIDERS,
@@ -442,75 +444,236 @@ class TestQueueRouteWired:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# ── respx mock helpers (transport-level mocking for behavioral tests) ─────────
+
+def mock_jira_connect(router: respx.Router, auth: AdapterAuth) -> None:
+    """Mock a successful Jira GET /rest/api/3/myself."""
+    router.get(f"{auth.site_url.rstrip('/')}/rest/api/3/myself").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "accountId": "12345",
+                "emailAddress": auth.email,
+                "displayName": "Maya",
+                "active": True,
+            },
+        )
+    )
+
+
+def mock_jira_create_task(router: respx.Router, auth: AdapterAuth) -> None:
+    """Mock a successful Jira POST /rest/api/3/issue."""
+    router.post(f"{auth.site_url.rstrip('/')}/rest/api/3/issue").mock(
+        return_value=httpx.Response(
+            201,
+            json={"id": "10001", "key": "ACME-123", "self": f"{auth.site_url.rstrip('/')}/rest/api/3/issue/10001"},
+        )
+    )
+
+
+def mock_linear_connect(router: respx.Router, auth: AdapterAuth) -> None:
+    """Mock a successful Linear GraphQL viewer query."""
+    url_key = auth.workspace_url.replace("https://", "").replace(".linear.app", "")
+    router.post("https://api.linear.app/graphql").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "viewer": {"id": "linear-user-123", "name": "Maya", "email": auth.email},
+                    "organization": {"urlKey": url_key},
+                }
+            },
+        )
+    )
+
+
+def mock_linear_create_task(router: respx.Router) -> None:
+    """Mock a successful Linear GraphQL issueCreate mutation."""
+    router.post("https://api.linear.app/graphql").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "issueCreate": {
+                        "success": True,
+                        "issue": {
+                            "id": "linear-issue-123",
+                            "identifier": "TEAM-123",
+                            "url": "https://linear.app/team/issue/linear-issue-123",
+                        },
+                    }
+                }
+            },
+        )
+    )
+
+
+def mock_asana_connect(router: respx.Router, auth: AdapterAuth) -> None:
+    """Mock successful Asana GET /users/me and GET /workspaces."""
+    router.get("https://app.asana.com/api/1.0/users/me").mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": {"gid": "12345", "email": auth.email, "name": "Maya"}},
+        )
+    )
+    router.get("https://app.asana.com/api/1.0/workspaces").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "gid": auth.default_project,
+                        "name": "Test Workspace",
+                        "permalink_url": "https://app.asana.com/0/12345/list",
+                    }
+                ]
+            },
+        )
+    )
+
+
+def mock_asana_create_task(router: respx.Router) -> None:
+    """Mock a successful Asana POST /tasks."""
+    router.post("https://app.asana.com/api/1.0/tasks").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "data": {
+                    "gid": "asana-task-123",
+                    "name": "Ship the Q3 report",
+                    "permalink_url": "https://app.asana.com/0/12345/asana-task-123",
+                }
+            },
+        )
+    )
+
+
+def mock_todoist_connect(router: respx.Router) -> None:
+    """Mock a successful Todoist GET /projects."""
+    router.get("https://api.todoist.com/rest/v2/projects").mock(
+        return_value=httpx.Response(
+            200,
+            json=[{"id": "12345", "name": "Test Project", "url": "https://todoist.com/project/12345"}],
+        )
+    )
+
+
+def mock_todoist_create_task(router: respx.Router) -> None:
+    """Mock a successful Todoist POST /tasks."""
+    router.post("https://api.todoist.com/rest/v2/tasks").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "todoist-task-123",
+                "content": "Ship the Q3 report",
+                "url": "https://todoist.com/showTask?id=todoist-task-123",
+            },
+        )
+    )
+
+
 # PART 2: Behavioral tests (should FAIL with NotImplementedError)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestJiraAdapterBehavior:
-    """Behavioral tests for JiraAdapter — all should raise NotImplementedError."""
+    """Behavioral tests for JiraAdapter — verified against mocked transport."""
 
-    def test_connect_raises_not_implemented(self):
+    def test_connect_returns_connection(self, respx_mock: respx.Router) -> None:
+        mock_jira_connect(respx_mock, SAMPLE_AUTH_JIRA)
         adapter = JiraAdapter()
-        with pytest.raises(NotImplementedError):
-            import asyncio
-            asyncio.run(adapter.connect(SAMPLE_AUTH_JIRA))
+        import asyncio
+        conn = asyncio.run(adapter.connect(SAMPLE_AUTH_JIRA))
+        assert isinstance(conn, AdapterConnection)
+        assert conn.account_email == SAMPLE_AUTH_JIRA.email
+        assert conn.account_url == SAMPLE_AUTH_JIRA.site_url.rstrip("/")
 
-    def test_create_task_raises_not_implemented(self):
+    def test_create_task_returns_result(self, respx_mock: respx.Router) -> None:
+        mock_jira_connect(respx_mock, SAMPLE_AUTH_JIRA)
+        mock_jira_create_task(respx_mock, SAMPLE_AUTH_JIRA)
         adapter = JiraAdapter()
-        with pytest.raises(NotImplementedError):
-            import asyncio
-            asyncio.run(adapter.create_task(SAMPLE_ACTION))
+        import asyncio
+        asyncio.run(adapter.connect(SAMPLE_AUTH_JIRA))
+        result = asyncio.run(adapter.create_task(SAMPLE_ACTION))
+        assert isinstance(result, AdapterTaskResult)
+        assert result.external_id == "ACME-123"
+        assert "browse/ACME-123" in result.external_url
 
-    def test_connect_raises_not_implemented_explicit_auth(self):
+    def test_connect_returns_connection_explicit_auth(self, respx_mock: respx.Router) -> None:
+        mock_jira_connect(respx_mock, SAMPLE_AUTH_JIRA)
         adapter = JiraAdapter()
-        with pytest.raises(NotImplementedError):
-            import asyncio
-            asyncio.run(adapter.connect(SAMPLE_AUTH_JIRA))
+        import asyncio
+        conn = asyncio.run(adapter.connect(SAMPLE_AUTH_JIRA))
+        assert isinstance(conn, AdapterConnection)
+        assert conn.account_url == "https://acme.atlassian.net"
 
 
 class TestLinearAdapterBehavior:
-    """Behavioral tests for LinearAdapter — all should raise NotImplementedError."""
+    """Behavioral tests for LinearAdapter — verified against mocked transport."""
 
-    def test_connect_raises_not_implemented(self):
+    def test_connect_returns_connection(self, respx_mock: respx.Router) -> None:
+        mock_linear_connect(respx_mock, SAMPLE_AUTH_LINEAR)
         adapter = LinearAdapter()
-        with pytest.raises(NotImplementedError):
-            import asyncio
-            asyncio.run(adapter.connect(SAMPLE_AUTH_LINEAR))
+        import asyncio
+        conn = asyncio.run(adapter.connect(SAMPLE_AUTH_LINEAR))
+        assert isinstance(conn, AdapterConnection)
+        assert conn.account_email == SAMPLE_AUTH_LINEAR.email
+        assert conn.account_url == "https://acme.linear.app"
 
-    def test_create_task_raises_not_implemented(self):
+    def test_create_task_returns_result(self, respx_mock: respx.Router) -> None:
+        mock_linear_connect(respx_mock, SAMPLE_AUTH_LINEAR)
+        mock_linear_create_task(respx_mock)
         adapter = LinearAdapter()
-        with pytest.raises(NotImplementedError):
-            import asyncio
-            asyncio.run(adapter.create_task(SAMPLE_ACTION))
+        import asyncio
+        asyncio.run(adapter.connect(SAMPLE_AUTH_LINEAR))
+        result = asyncio.run(adapter.create_task(SAMPLE_ACTION))
+        assert isinstance(result, AdapterTaskResult)
+        assert result.external_id == "linear-issue-123"
+        assert "linear.app" in result.external_url
 
 
 class TestAsanaAdapterBehavior:
-    """Behavioral tests for AsanaAdapter — all should raise NotImplementedError."""
+    """Behavioral tests for AsanaAdapter — verified against mocked transport."""
 
-    def test_connect_raises_not_implemented(self):
+    def test_connect_returns_connection(self, respx_mock: respx.Router) -> None:
+        mock_asana_connect(respx_mock, SAMPLE_AUTH_ASANA)
         adapter = AsanaAdapter()
-        with pytest.raises(NotImplementedError):
-            import asyncio
-            asyncio.run(adapter.connect(SAMPLE_AUTH_ASANA))
+        import asyncio
+        conn = asyncio.run(adapter.connect(SAMPLE_AUTH_ASANA))
+        assert isinstance(conn, AdapterConnection)
+        assert conn.account_email == SAMPLE_AUTH_ASANA.email
+        assert "app.asana.com" in conn.account_url
 
-    def test_create_task_raises_not_implemented(self):
+    def test_create_task_returns_result(self, respx_mock: respx.Router) -> None:
+        mock_asana_connect(respx_mock, SAMPLE_AUTH_ASANA)
+        mock_asana_create_task(respx_mock)
         adapter = AsanaAdapter()
-        with pytest.raises(NotImplementedError):
-            import asyncio
-            asyncio.run(adapter.create_task(SAMPLE_ACTION))
+        import asyncio
+        asyncio.run(adapter.connect(SAMPLE_AUTH_ASANA))
+        result = asyncio.run(adapter.create_task(SAMPLE_ACTION))
+        assert isinstance(result, AdapterTaskResult)
+        assert result.external_id == "asana-task-123"
+        assert "asana.com" in result.external_url
 
 
 class TestTodoistAdapterBehavior:
-    """Behavioral tests for TodoistAdapter — all should raise NotImplementedError."""
+    """Behavioral tests for TodoistAdapter — verified against mocked transport."""
 
-    def test_connect_raises_not_implemented(self):
+    def test_connect_returns_connection(self, respx_mock: respx.Router) -> None:
+        mock_todoist_connect(respx_mock)
         adapter = TodoistAdapter()
-        with pytest.raises(NotImplementedError):
-            import asyncio
-            asyncio.run(adapter.connect(SAMPLE_AUTH_TODOIST))
+        import asyncio
+        conn = asyncio.run(adapter.connect(SAMPLE_AUTH_TODOIST))
+        assert isinstance(conn, AdapterConnection)
+        assert conn.account_url == "https://todoist.com"
 
-    def test_create_task_raises_not_implemented(self):
+    def test_create_task_returns_result(self, respx_mock: respx.Router) -> None:
+        mock_todoist_connect(respx_mock)
+        mock_todoist_create_task(respx_mock)
         adapter = TodoistAdapter()
-        with pytest.raises(NotImplementedError):
-            import asyncio
-            asyncio.run(adapter.create_task(SAMPLE_ACTION))
+        import asyncio
+        asyncio.run(adapter.connect(SAMPLE_AUTH_TODOIST))
+        result = asyncio.run(adapter.create_task(SAMPLE_ACTION))
+        assert isinstance(result, AdapterTaskResult)
+        assert result.external_id == "todoist-task-123"
+        assert "todoist.com" in result.external_url
