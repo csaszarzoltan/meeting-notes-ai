@@ -443,3 +443,45 @@ class OAuthState(Base, TimestampMixin):
         DateTime(timezone=True), nullable=False
     )
     used: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+
+# ── PM Integration Tokens ──────────────────────────────────────────────────
+
+
+class PMIntegrationToken(Base, TimestampMixin):
+    """Encrypted credentials for PM tool integrations (Jira, Linear, Asana, Todoist).
+
+    One row per (user, provider).  The ``encrypted_credentials`` blob is an
+    AES-256-GCM ciphertext (via ``TokenEncryptor``) of a JSON object carrying
+    the provider-specific fields (token, site_url, email, ...).
+
+    The workspace JSON doc mirrors connection metadata for the UI; this DB row
+    is the **source of truth** for credentials.
+    """
+
+    __tablename__ = "pm_integration_tokens"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "provider", name="uq_pm_integration_tokens_user_provider"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id"), nullable=False, index=True
+    )
+    provider: Mapped[str] = mapped_column(String(50), nullable=False)
+    encrypted_credentials: Mapped[str] = mapped_column(Text, nullable=False)
+    account_email: Mapped[str] = mapped_column(
+        String(255), nullable=False, default=""
+    )
+    account_url: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    token_expires_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    disconnected_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )

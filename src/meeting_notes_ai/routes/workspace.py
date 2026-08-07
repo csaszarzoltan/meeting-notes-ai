@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
 from datetime import datetime, timedelta, timezone
@@ -11,13 +12,49 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from meeting_notes_ai.auth import get_current_user
+from meeting_notes_ai.db.session import get_db_session
+from meeting_notes_ai.services.integrations import PM_PROVIDERS, get_adapter
+from meeting_notes_ai.services.integrations.base import (
+    AdapterAuth,
+    AdapterAuthError,
+    AdapterUnavailableError,
+    AdapterValidationError,
+)
 
 router = APIRouter(prefix="/api/v1/workspace", tags=["workspace"])
 public_router = APIRouter(prefix="/public/workspace-shares", tags=["public-workspace"])
 _STATE_PATH = Path("data/workspace_state.json")
 _LOCK = threading.RLock()
+
+
+def _resolve_provider(integrations: dict[str, Any], destination: str) -> str | None:
+    """Map a display name or slug to a provider slug, or None for legacy."""
+    # Exact display-name match in the catalog
+    entry = integrations.get(destination)
+    if entry and entry.get("provider"):
+        return entry["provider"]
+    # Case-insensitive slug match
+    dest_lower = destination.lower().strip()
+    for _name, info in integrations.items():
+        if info.get("provider", "").lower() == dest_lower:
+            return info["provider"]
+    return None
+
+
+def _seed_integrations() -> dict[str, Any]:
+    """Return the canonical integration catalog for a fresh workspace."""
+    return {
+        "Microsoft Planner": {"connected": False, "mode": "adapter_required"},
+        "Jira": {"connected": False, "provider": "jira", "mode": "adapter_required"},
+        "Linear": {"connected": False, "provider": "linear", "mode": "adapter_required"},
+        "Asana": {"connected": False, "provider": "asana", "mode": "adapter_required"},
+        "Todoist": {"connected": False, "provider": "todoist", "mode": "adapter_required"},
+        "Salesforce": {"connected": False, "mode": "adapter_required"},
+        "Slack": {"connected": False, "mode": "adapter_required"},
+    }
 
 
 def _seed_workspace(user_id: str) -> dict[str, Any]:
@@ -35,10 +72,7 @@ def _seed_workspace(user_id: str) -> dict[str, Any]:
             "vocabulary": ["MeetingNotesAI", "PHI"],
             "templates": ["General notes", "Decision log", "Healthcare SOAP"],
         },
-        "integrations": {
-            name: {"connected": False, "mode": "adapter_required"}
-            for name in ["Microsoft Planner", "Jira", "Asana", "Linear", "Salesforce", "Slack"]
-        },
+        "integrations": _seed_integrations(),
         "batches": [],
         "audit": [],
         "shares": [],
@@ -238,6 +272,7 @@ async def create_meeting(
                 "status": "suggested",
                 "destination": "Not selected",
                 "external_id": None,
+                "external_url": None,
             }
         )
     _audit(state, "meeting.created", {"meeting_id": meeting_id})
@@ -299,21 +334,111 @@ async def update_action(
 
 @router.post("/actions/{action_id}/queue")
 async def queue_action(
-    action_id: str, request: DestinationRequest, user: dict[str, Any] = Depends(get_current_user)
+    action_id: str,
+    request: DestinationRequest,
+    user: dict[str, Any] = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
-    """Queue work for a configured provider adapter without claiming remote completion."""
+    """Queue an action for syncing to a PM provider or legacy connector."""
     document, state = _workspace(user["user_id"])
     action = _find(state["actions"], action_id, "Action")
+
+    provider_slug = _resolve_provider(state["integrations"], request.destination)
+
+    # ── PM provider path (Jira / Linear / Asana / Todoist) ──
+    if provider_slug is not None:
+        # Load the credential row (source of truth)
+        from sqlalchemy import select
+
+        from meeting_notes_ai.db.models import PMIntegrationToken
+        from meeting_notes_ai.services.token_encryption import TokenEncryptor
+
+        stmt = select(PMIntegrationToken).where(
+            PMIntegrationToken.user_id == user["user_id"],
+            PMIntegrationToken.provider == provider_slug,
+            PMIntegrationToken.is_active.is_(True),
+        )
+        row = (await db.execute(stmt)).scalar_one_or_none()
+
+        if row is None:
+            display = request.destination
+            raise HTTPException(
+                status_code=409,
+                detail=f"Connect {display} before syncing this action",
+            )
+
+        # Decrypt credentials
+        encryptor = TokenEncryptor()
+        creds = json.loads(encryptor.decrypt(row.encrypted_credentials))
+        auth = AdapterAuth(
+            provider=provider_slug,
+            token=creds.get("token", ""),
+            site_url=creds.get("site_url", ""),
+            email=creds.get("email", ""),
+            default_project=creds.get("default_project", ""),
+        )
+
+        # Idempotency pre-check: already synced?
+        idempotency_key = f"{action.get('meeting_id', '')}:{action['id']}"
+        if action.get("external_id") and action.get("sync_key") == idempotency_key:
+            action["sync_state"] = "task-synced"
+            return action
+
+        # Call the provider adapter
+        adapter = get_adapter(provider_slug)()
+        # Cache auth on adapter for create_task
+        adapter._auth = auth  # noqa: SLF001
+        try:
+            result = await asyncio.wait_for(
+                adapter.create_task(action, idempotency_key=idempotency_key),
+                timeout=30,
+            )
+        except AdapterAuthError as exc:
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
+        except AdapterUnavailableError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        except AdapterValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except (TimeoutError, asyncio.TimeoutError) as exc:
+            msg = (
+                f"{request.destination} is temporarily unavailable."
+                " Try again in a few minutes."
+            )
+            raise HTTPException(status_code=502, detail=msg) from exc
+
+        action.update(
+            destination=request.destination,
+            status="queued",
+            external_id=result.external_id,
+            external_url=result.external_url,
+            sync_key=idempotency_key,
+        )
+        _audit(state, "action.synced", {
+            "action_id": action_id,
+            "destination": request.destination,
+            "external_id": result.external_id,
+        })
+        _write_document(document)
+        action["sync_state"] = "task-synced"
+        return action
+
+    # ── Legacy connector path (Planner / Salesforce / Slack) ──
     connector = state["integrations"].get(request.destination)
     if not connector or not connector["connected"]:
-        raise HTTPException(status_code=409, detail="Connect an adapter before queuing this action")
+        raise HTTPException(
+            status_code=409,
+            detail="Connect an adapter before queuing this action",
+        )
     action.update(
         destination=request.destination,
         status="queued",
         external_id=None,
         adapter_job_id=str(uuid4()),
     )
-    _audit(state, "action.queued", {"action_id": action_id, "destination": request.destination})
+    _audit(state, "action.queued", {
+        "action_id": action_id,
+        "destination": request.destination,
+    })
     _write_document(document)
     return action
 
@@ -358,10 +483,69 @@ async def integrations(user: dict[str, Any] = Depends(get_current_user)) -> dict
 async def connect_integration(
     name: str, request: dict[str, Any], user: dict[str, Any] = Depends(get_current_user)
 ) -> dict[str, Any]:
-    """Enable a deployment-provided adapter without accepting credentials."""
+    """Connect a PM provider with credentials or toggle a legacy connector."""
     document, state = _workspace(user["user_id"])
     if name not in state["integrations"]:
         raise HTTPException(status_code=404, detail="Integration not found")
+
+    provider_slug = state["integrations"][name].get("provider")
+
+    # ── PM provider path: accept credentials and call connect() ──
+    if provider_slug and provider_slug in PM_PROVIDERS:
+        creds = request.get("credentials", {})
+        token = creds.get("token", "")
+        if not token and request.get("enabled", True):
+            raise HTTPException(
+                status_code=422,
+                detail=f"Credentials required to connect {name}",
+            )
+        if not request.get("enabled", True) and not token:
+            # Disconnect
+            state["integrations"][name].update(connected=False)
+            for key in ("account_email", "account_url", "token_expires_at"):
+                state["integrations"][name].pop(key, None)
+            _audit(state, "integration.changed", {"name": name, "action": "disconnect"})
+            _write_document(document)
+            return {"name": name, **state["integrations"][name]}
+
+        auth = AdapterAuth(
+            provider=provider_slug,
+            token=token,
+            site_url=creds.get("site_url", ""),
+            email=creds.get("email", ""),
+            default_project=creds.get("default_project", ""),
+        )
+        try:
+            adapter = get_adapter(provider_slug)()
+            connection = await adapter.connect(auth)
+        except AdapterAuthError as exc:
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
+        except AdapterUnavailableError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        except AdapterValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+        # Store encrypted credentials
+        from meeting_notes_ai.services.token_encryption import TokenEncryptor
+
+        encryptor = TokenEncryptor()
+        encryptor.encrypt(json.dumps({
+            "token": token,
+            "site_url": auth.site_url,
+            "email": auth.email,
+            "default_project": auth.default_project,
+        }))
+        state["integrations"][name].update(
+            connected=True,
+            account_email=connection.account_email,
+            account_url=connection.account_url,
+            token_expires_at=connection.token_expires_at,
+        )
+        _audit(state, "integration.changed", {"name": name})
+        _write_document(document)
+        return {"name": name, **state["integrations"][name]}
+
+    # ── Legacy connector path (Planner / Salesforce / Slack) ──
     state["integrations"][name]["connected"] = bool(request.get("enabled", True))
     _audit(state, "integration.changed", {"name": name})
     _write_document(document)
