@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Features
+- Project management tool sync — sync confirmed action items to **Jira**, **Linear**, **Asana**, or **Todoist** with real task creation (`POST /api/v1/workspace/actions/{action_id}/queue` now calls each provider's API and persists a real `external_id` / `external_url` with `sync_state: "task-synced"`, replacing the fake queue-only behavior). Provider credentials are submitted via `POST /api/v1/workspace/integrations/{name}/connect` and stored per-user, encrypted at rest with AES-256-GCM (`STORAGE_ENCRYPTION_KEY` / `HIPAA_MASTER_KEY`); no per-provider env vars are required. Sync is idempotent (`<meeting_id>:<action_id>` key) so retries are safe, and every provider error is mapped to a sanitized 401/502/422. Full setup (creating each provider's token, connect/sync contracts, error table, troubleshooting) is in `docs/integrations.md`.
+
+---
+
 ## [1.1.2] — 2026-08-06
 
 ### Features

@@ -28,7 +28,7 @@ Open `http://127.0.0.1:8000/app`. Create an account through `POST /api/v1/auth/s
 3. Select General, Healthcare, or Legal context and review visible privacy settings.
 4. The processed result is saved as one canonical meeting.
 5. Edit the summary, inspect cited evidence, seek source audio, and approve or reject.
-6. Confirm owners and deadlines; configured external adapters receive queued work.
+6. Confirm owners and deadlines; configured external adapters receive queued work — confirmed actions sync to Jira, Linear, Asana, or Todoist.
 7. Create an expiring share only after approval, inspect access, and revoke immediately when needed.
 8. Find prior work through Cmd/Ctrl+K workspace search.
 
@@ -43,6 +43,21 @@ Connect a Google account through OAuth2, browse upcoming events, and import a me
 - `GET /api/v1/integrations/google-calendar/status` and `DELETE /api/v1/integrations/google-calendar/disconnect` — manage the connection
 
 Tokens are encrypted at rest (AES-256-GCM) and refreshed automatically; expired or revoked tokens surface a re-authorization prompt instead of a raw error. Full setup (Google Cloud Console prerequisites, env vars, user flow, API reference, troubleshooting) is in [docs/integrations/google-calendar.md](docs/integrations/google-calendar.md).
+
+## Project management integrations (Jira, Linear, Asana, Todoist)
+
+Confirm an action's owner and due date, then sync it straight into a project
+management tool with **Sync to {provider}** in the Action Center:
+
+- `POST /api/v1/workspace/integrations/{name}/connect` — connect a PM provider with a token (`credentials.token` plus provider-specific `site_url` / `email` / `default_project`); validates the credential and stores it encrypted
+- `POST /api/v1/workspace/actions/{action_id}/queue` — create a real task in the provider, storing the provider's native `external_id` and a `external_url` link (`sync_state: "task-synced"`); idempotent, safe to retry
+- `GET /api/v1/workspace/integrations` — list the catalog (PM providers expose `account_email`, `account_url`, `token_expires_at`)
+
+Token-based credentials are stored per-user, encrypted at rest with AES-256-GCM
+(`STORAGE_ENCRYPTION_KEY` / `HIPAA_MASTER_KEY`); no per-provider env vars are
+required. Full setup (creating each provider's token, scopes, connect/sync
+contracts, error table, troubleshooting) is in
+[docs/integrations.md](docs/integrations.md).
 
 ## Security model
 
