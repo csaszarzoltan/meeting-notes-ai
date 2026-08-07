@@ -481,7 +481,10 @@ async def integrations(user: dict[str, Any] = Depends(get_current_user)) -> dict
 
 @router.post("/integrations/{name}/connect")
 async def connect_integration(
-    name: str, request: dict[str, Any], user: dict[str, Any] = Depends(get_current_user)
+    name: str,
+    request: dict[str, Any],
+    user: dict[str, Any] = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
     """Connect a PM provider with credentials or toggle a legacy connector."""
     document, state = _workspace(user["user_id"])
@@ -500,7 +503,21 @@ async def connect_integration(
                 detail=f"Credentials required to connect {name}",
             )
         if not request.get("enabled", True) and not token:
-            # Disconnect
+            # Disconnect - also update DB row
+            from sqlalchemy import select
+
+            from meeting_notes_ai.db.models import PMIntegrationToken
+
+            stmt = select(PMIntegrationToken).where(
+                PMIntegrationToken.user_id == user["user_id"],
+                PMIntegrationToken.provider == provider_slug,
+            )
+            row = (await db.execute(stmt)).scalar_one_or_none()
+            if row:
+                row.is_active = False
+                row.disconnected_at = datetime.now(timezone.utc)
+                await db.commit()
+
             state["integrations"][name].update(connected=False)
             for key in ("account_email", "account_url", "token_expires_at"):
                 state["integrations"][name].pop(key, None)
@@ -525,16 +542,44 @@ async def connect_integration(
         except AdapterValidationError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-        # Store encrypted credentials
+        # Store encrypted credentials in DB (source of truth)
+        from sqlalchemy import select
+
+        from meeting_notes_ai.db.models import PMIntegrationToken
         from meeting_notes_ai.services.token_encryption import TokenEncryptor
 
         encryptor = TokenEncryptor()
-        encryptor.encrypt(json.dumps({
+        encrypted = encryptor.encrypt(json.dumps({
             "token": token,
             "site_url": auth.site_url,
             "email": auth.email,
             "default_project": auth.default_project,
         }))
+
+        stmt = select(PMIntegrationToken).where(
+            PMIntegrationToken.user_id == user["user_id"],
+            PMIntegrationToken.provider == provider_slug,
+        )
+        row = (await db.execute(stmt)).scalar_one_or_none()
+        if row:
+            row.encrypted_credentials = encrypted
+            row.account_email = connection.account_email
+            row.account_url = connection.account_url
+            row.token_expires_at = connection.token_expires_at
+            row.is_active = True
+            row.disconnected_at = None
+        else:
+            row = PMIntegrationToken(
+                user_id=user["user_id"],
+                provider=provider_slug,
+                encrypted_credentials=encrypted,
+                account_email=connection.account_email,
+                account_url=connection.account_url,
+                token_expires_at=connection.token_expires_at,
+            )
+            db.add(row)
+        await db.commit()
+
         state["integrations"][name].update(
             connected=True,
             account_email=connection.account_email,

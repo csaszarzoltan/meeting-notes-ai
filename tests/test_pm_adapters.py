@@ -476,40 +476,96 @@ def mock_jira_create_task(router: respx.Router, auth: AdapterAuth) -> None:
 
 
 def mock_linear_connect(router: respx.Router, auth: AdapterAuth) -> None:
-    """Mock a successful Linear GraphQL viewer query."""
+    """Mock a successful Linear GraphQL viewer query.
+
+    Uses a side-effect dispatcher so the single route answers both the
+    viewer query (connect) and the issueCreate mutation (create_task)
+    correctly — both hit the same GraphQL endpoint.
+    """
     url_key = auth.workspace_url.replace("https://", "").replace(".linear.app", "")
-    router.post("https://api.linear.app/graphql").mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "data": {
-                    "viewer": {"id": "linear-user-123", "name": "Maya", "email": auth.email},
-                    "organization": {"urlKey": url_key},
+
+    def _dispatch(request):
+        try:
+            query = _parse_graphql_query(request)
+        except Exception:
+            query = ""
+        if "ViewerInfo" in query:
+            return httpx.Response(
+                200,
+                json={
+                    "data": {
+                        "viewer": {"id": "linear-user-123", "name": "Maya", "email": auth.email},
+                        "organization": {"urlKey": url_key},
+                    }
+                },
+            )
+        return _linear_create_response()
+
+    router.post("https://api.linear.app/graphql").mock(side_effect=_dispatch)
+
+
+def _parse_graphql_query(request) -> str:
+    """Extract the GraphQL ``query``/``mutation`` name from a request body."""
+    import json as _json
+
+    try:
+        payload = _json.loads(request.content)
+    except Exception:
+        return ""
+    if isinstance(payload, dict):
+        return payload.get("query", "")
+    return ""
+
+
+def _linear_create_response() -> httpx.Response:
+    """A successful Linear issueCreate mutation payload."""
+    return httpx.Response(
+        200,
+        json={
+            "data": {
+                "issueCreate": {
+                    "success": True,
+                    "issue": {
+                        "id": "linear-issue-123",
+                        "identifier": "TEAM-123",
+                        "url": "https://linear.app/team/issue/linear-issue-123",
+                    },
                 }
-            },
-        )
+            }
+        },
     )
 
 
 def mock_linear_create_task(router: respx.Router) -> None:
-    """Mock a successful Linear GraphQL issueCreate mutation."""
-    router.post("https://api.linear.app/graphql").mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "data": {
-                    "issueCreate": {
-                        "success": True,
-                        "issue": {
-                            "id": "linear-issue-123",
-                            "identifier": "TEAM-123",
-                            "url": "https://linear.app/team/issue/linear-issue-123",
+    """Mock a successful Linear GraphQL issueCreate mutation.
+
+    Same dispatcher as ``mock_linear_connect`` so connect() + create_task()
+    each receive the correct GraphQL payload.
+    """
+
+    def _dispatch(request):
+        try:
+            query = _parse_graphql_query(request)
+        except Exception:
+            query = ""
+        if "ViewerInfo" in query:
+            # connect() was called first — return the viewer payload
+            return httpx.Response(
+                200,
+                json={
+                    "data": {
+                        "viewer": {
+                            "id": "linear-user-123",
+                            "name": "Maya",
+                            "email": "maya@acme.com",
                         },
+                        "organization": {"urlKey": "acme"},
                     }
-                }
-            },
-        )
-    )
+                },
+            )
+        return _linear_create_response()
+
+    router.post("https://api.linear.app/graphql").mock(side_effect=_dispatch)
 
 
 def mock_asana_connect(router: respx.Router, auth: AdapterAuth) -> None:
@@ -634,6 +690,93 @@ class TestLinearAdapterBehavior:
         assert isinstance(result, AdapterTaskResult)
         assert result.external_id == "linear-issue-123"
         assert "linear.app" in result.external_url
+
+    def test_connect_graphql_error_200_raises_auth_error(
+        self, respx_mock: respx.Router
+    ) -> None:
+        """HTTP 200 with an `errors` array must raise AdapterAuthError, not crash."""
+        respx_mock.post("https://api.linear.app/graphql").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "errors": [
+                        {
+                            "message": "Authentication required",
+                            "extensions": {"code": "AUTHENTICATION_REQUIRED"},
+                        }
+                    ]
+                },
+            )
+        )
+        adapter = LinearAdapter()
+        import asyncio
+        with pytest.raises(AdapterAuthError):
+            asyncio.run(adapter.connect(SAMPLE_AUTH_LINEAR))
+
+    def test_connect_graphql_errors_null_viewer_raises_auth_error(
+        self, respx_mock: respx.Router
+    ) -> None:
+        """`data: {"viewer": null}` must raise AdapterAuthError (unauthenticated)."""
+        respx_mock.post("https://api.linear.app/graphql").mock(
+            return_value=httpx.Response(
+                200,
+                json={"data": {"viewer": None, "organization": {"urlKey": "acme"}}},
+            )
+        )
+        adapter = LinearAdapter()
+        import asyncio
+        with pytest.raises(AdapterAuthError):
+            asyncio.run(adapter.connect(SAMPLE_AUTH_LINEAR))
+
+    def test_connect_graphql_team_error_raises_validation_error(
+        self, respx_mock: respx.Router
+    ) -> None:
+        """A GraphQL team-scoped error surfaces as AdapterValidationError."""
+        respx_mock.post("https://api.linear.app/graphql").mock(
+            return_value=httpx.Response(
+                200,
+                json={"errors": [{"message": "Team not found: team-uuid-001"}]},
+            )
+        )
+        adapter = LinearAdapter()
+        import asyncio
+        with pytest.raises(AdapterValidationError):
+            asyncio.run(adapter.connect(SAMPLE_AUTH_LINEAR))
+
+    def test_connect_graphql_rate_limit_raises_unavailable_error(
+        self, respx_mock: respx.Router
+    ) -> None:
+        """A GraphQL rate-limit error surfaces as AdapterUnavailableError."""
+        respx_mock.post("https://api.linear.app/graphql").mock(
+            return_value=httpx.Response(
+                200,
+                json={"errors": [{"message": "Rate limit exceeded, retry later"}]},
+            )
+        )
+        adapter = LinearAdapter()
+        import asyncio
+        with pytest.raises(AdapterUnavailableError):
+            asyncio.run(adapter.connect(SAMPLE_AUTH_LINEAR))
+
+    def test_create_task_graphql_error_200_raises_auth_error(
+        self, respx_mock: respx.Router
+    ) -> None:
+        """create_task must also surface a 200+errors body as a friendly error."""
+        respx_mock.post("https://api.linear.app/graphql").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "errors": [
+                        {"message": "Invalid API key", "extensions": {"code": "INVALID_API_KEY"}}
+                    ]
+                },
+            )
+        )
+        adapter = LinearAdapter()
+        adapter._auth = SAMPLE_AUTH_LINEAR  # noqa: SLF001 — bypass connect()
+        import asyncio
+        with pytest.raises(AdapterAuthError):
+            asyncio.run(adapter.create_task(SAMPLE_ACTION))
 
 
 class TestAsanaAdapterBehavior:

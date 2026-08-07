@@ -28,6 +28,7 @@ const FILTERS = [
 /** Persisted action confirmation and connector synchronization. */
 export function ActionCenter() {
   const [items, setItems] = useState<WorkAction[]>([]);
+  const [integrations, setIntegrations] = useState<Record<string, { connected: boolean }>>({});
   const [filter, setFilter] = useState('Assigned to me');
   const [error, setError] = useState('');
   const [syncingId, setSyncingId] = useState<string | null>(null);
@@ -37,8 +38,14 @@ export function ActionCenter() {
       .then((b) => setItems(b.items))
       .catch((e: Error) => setError(e.message));
 
+  const loadIntegrations = () =>
+    workspaceRequest<{ items: Record<string, { connected: boolean }> }>('/integrations')
+      .then((b) => setIntegrations(b.items))
+      .catch(() => setIntegrations({}));
+
   useEffect(() => {
     void load();
+    void loadIntegrations();
   }, []);
 
   const visible = useMemo(
@@ -85,6 +92,10 @@ export function ActionCenter() {
     } finally {
       setSyncingId(null);
     }
+  };
+
+  const setDestination = (i: WorkAction, destination: string) => {
+    setItems((prev) => prev.map((a) => (a.id === i.id ? { ...a, destination } : a)));
   };
 
   return (
@@ -144,8 +155,33 @@ export function ActionCenter() {
               <button className="evidence-link">Source evidence · {i.timestamp}</button>
             </div>
             <div className="execution-destination">
-              <small>{i.destination}</small>
-              {i.status === 'suggested' ? (
+              {i.status === 'confirmed' ? (
+                <>
+                  <select
+                    aria-label="Sync destination"
+                    value={i.destination === 'Not selected' ? '' : i.destination}
+                    onChange={(e) => setDestination(i, e.target.value)}
+                  >
+                    <option value="" disabled>
+                      Select destination…
+                    </option>
+                    {Object.entries(integrations)
+                      .filter(([, s]) => s.connected)
+                      .map(([name]) => (
+                        <option key={name} value={name}>
+                          {name}
+                        </option>
+                      ))}
+                  </select>
+                  <button
+                    className="primary compact"
+                    disabled={syncingId === i.id || i.destination === 'Not selected'}
+                    onClick={() => void sync(i)}
+                  >
+                    {syncingId === i.id ? 'Syncing…' : 'Sync'}
+                  </button>
+                </>
+              ) : i.status === 'suggested' ? (
                 <button className="primary" onClick={() => void confirm(i)}>
                   Confirm action
                 </button>
