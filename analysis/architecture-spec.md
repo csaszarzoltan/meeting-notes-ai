@@ -1,1557 +1,865 @@
-# Google Calendar OAuth2 Integration — Architecture Spec
+# PM Tool Adapter Architecture — Jira / Linear / Asana / Todoist Sync
 
-**Version**: 1.0  
-**Date**: 2026-08-06  
-**Status**: Draft  
-**Project**: MeetingNotesAI v1.1.2  
+**Version**: 2.0
+**Date**: 2026-08-07
+**Status**: Approved (replaces v1.0 Google Calendar spec, which is preserved at `analysis/architecture-gcal-v1.md`; the integration remains live)
+**Project**: MeetingNotesAI v1.1.2 → v1.2.0
+**Consumers**: pre-tester (`tests/test_pm_adapters.py`), backend developer (`src/meeting_notes_ai/services/integrations/`), frontend developer (`frontend/src/workspace/ActionCenter.tsx`, `IntegrationsCenter.tsx`), tester, tech-lead, release-manager, documenter.
 
 ---
 
 ## Table of Contents
 
 1. [Overview](#1-overview)
-2. [Service Layer Design](#2-service-layer-design)
-3. [Data Model](#3-data-model)
-4. [API Contract](#4-api-contract)
-5. [Security Design](#5-security-design)
-6. [Frontend Integration Points](#6-frontend-integration-points)
-7. [Implementation Roadmap](#7-implementation-roadmap)
+2. [Module Layout](#2-module-layout)
+3. [Adapter Interface](#3-adapter-interface)
+4. [Provider Credential Flows](#4-provider-credential-flows)
+5. [Data Model & Persistence](#5-data-model--persistence)
+6. [API Contract](#6-api-contract)
+7. [Idempotency](#7-idempotency)
+8. [Error & Retry Behavior](#8-error--retry-behavior)
+9. [Frontend Contract](#9-frontend-contract)
+10. [Backward Compatibility](#10-backward-compatibility)
+11. [Configuration & Environment](#11-configuration--environment)
+12. [Testing Strategy](#12-testing-strategy)
+13. [Implementation Order](#13-implementation-order)
+14. [ADR Summary](#14-adr-summary)
+15. [Open Questions](#15-open-questions)
 
 ---
 
 ## 1. Overview
 
-This spec designs a Google Calendar integration for MeetingNotesAI that lets
-users connect their Google account, browse upcoming meetings, and import
-calendar events as meeting records. The integration follows every existing
-pattern in the codebase: JWT/API-key auth via `get_current_user`, async
-SQLAlchemy models with UUID string PKs, `TimestampMixin`, AES-256-GCM token
-encryption, `SSRFProtector` for outbound URLs, and the `workspaceRequest`
-client on the frontend.
+MeetingNotesAI extracts action items with owners and deadlines from meetings.
+Today the Action Center stops at a facade: `POST /actions/{id}/queue`
+(workspace.py:300) mints `adapter_job_id=uuid4()` and never calls an external
+API, and every connector reports `connected: False, mode: adapter_required`
+(workspace.py:39). This spec replaces the facade for **Jira, Linear, Asana,
+and Todoist** with real provider calls, real stored credentials, and a real
+`task-synced` end state in the UI.
+
+The design reuses the proven in-repo patterns:
+
+- `services/google_calendar.py` — OAuth2 `get_authorization_url` /
+  `exchange_code` / `refresh_token` lifecycle, `asyncio.to_thread` for sync
+  SDK calls, `TokenExpiredError` → 401 "re-authorize".
+- `services/token_encryption.py` — AES-256-GCM envelope encryption
+  (`TokenEncryptor().encrypt/decrypt`) for every stored credential.
+- `db/models.py` `GoogleCalendarToken` / `OAuthState` — per-user credential
+  rows and short-lived CSRF state tokens with TTL + purge-on-read.
+- `routes/workspace.py` — JSON-file workspace document, `_find`,
+  `_audit`, `get_current_user` auth, `workspaceRequest` client.
 
 ### Scope
 
-- OAuth2 authorization code flow (Google)
-- Encrypted token storage per user (reusing `FileEncryptor` DEK/KEK pattern)
-- Automatic token refresh (Google access tokens expire in 1 hour)
-- Calendar event listing (next 7 days, default calendar)
-- One-click import of a calendar event as a meeting record
+- Real task creation in Jira / Linear / Asana / Todoist from the Action Center.
+- Real credential flows per provider (API key / PAT / REST token / Jira OAuth2),
+  encrypted at rest, per user.
+- `POST /actions/{id}/queue` performs a real provider call, persists
+  `external_id` + `external_url`, and is idempotent per meeting+action.
+- `GET /integrations` reports real connection state (provider, account,
+  URL, token expiry).
+- Action Center UI: "Sync to {provider}", external link, `task-synced`.
 
 ### Out of scope (future work)
 
-- Webhook-based real-time event sync
-- Multi-calendar support (beyond primary)
-- Google Meet link auto-join / live transcription
-- Calendar write-back (create/update events from MeetingNotesAI)
+- Bidirectional sync / webhooks from providers (task status changes → app).
+- Updating or closing provider tasks from the app.
+- Team/org-wide credential sharing (each user connects their own account).
+- Salesforce, Slack, Microsoft Planner real sync (legacy facade preserved for them).
+
+### Non-goals / hard rules
+
+- No fake `adapter_job_id` minting for the four PM providers.
+- 409 stays only for truly unconnected adapters — never for provider API errors.
+- Provider API errors never leak raw upstream messages into `detail` (HIPAA/PHI
+  hygiene: upstream bodies may echo user-supplied text).
+- No new runtime dependency: `httpx` (already a dependency) is the HTTP client
+  for all four providers.
 
 ---
 
-## 2. Service Layer Design
-
-### New files
+## 2. Module Layout
 
 ```
-src/meeting_notes_ai/services/google_calendar.py   # OAuth2 + Calendar API
-src/meeting_notes_ai/services/token_encryption.py  # Generic token encrypt/decrypt
+src/meeting_notes_ai/services/integrations/
+├── __init__.py            # public exports: Adapter, PMAdapterError, registry, get_adapter
+├── base.py                # Adapter ABC + AdapterAuth dataclass + create_task result model
+├── jira.py                # JiraAdapter
+├── linear.py              # LinearAdapter
+├── asana.py               # AsanaAdapter
+├── todoist.py             # TodoistAdapter
+└── registry.py            # PROVIDER_REGISTRY, get_adapter(name), provider metadata (labels, scopes, required env)
 ```
 
-### 2.1 Token Encryption Service
+Route layer additions:
 
-**File**: `src/meeting_notes_ai/services/token_encryption.py`
+```
+src/meeting_notes_ai/routes/workspace.py   # queue_action rewrite + connect/disconnect + GET /integrations
+src/meeting_notes_ai/routes/integrations.py # NEW router mounted at /api/v1/integrations
+```
 
-Reuses the DEK/KEK envelope pattern from `storage/encryption.py` but
-targets short strings (OAuth tokens) rather than large file blobs.
+Shared helpers:
+
+- `services/token_encryption.py` — unchanged; `TokenEncryptor` reused.
+- `services/http_client.py` — NEW tiny factory: `get_http_client()` returning
+  a shared `httpx.AsyncClient` (timeout 15s, `follow_redirects=True`), plus a
+  `ProviderHTTPError` exception carrying `status_code`, `provider`, and a
+  **sanitized** message. Keeps transport mocking trivial (one seam) and avoids
+  per-call client churn.
+
+DB additions (`db/models.py`):
+
+```
+class PMIntegrationToken(Base, TimestampMixin):
+    __tablename__ = "pm_integration_tokens"
+    id: str (UUID pk, default uuid4)
+    user_id: str (FK users.id, index)
+    provider: str            # "jira" | "linear" | "asana" | "todoist"
+    encrypted_credentials: Text   # JSON blob encrypted with TokenEncryptor
+    account_email: str = ""       # display only; never secret
+    account_url: str = ""         # e.g. site base URL / workspace URL
+    token_expires_at: DateTime(timezone=True) | None
+    is_active: bool = True
+    disconnected_at: DateTime(timezone=True) | None
+    UniqueConstraint("user_id", "provider")
+```
+
+Rules:
+
+- One active row per (user, provider). Reconnect = upsert on that key.
+- Disconnect = soft delete (`is_active=False`, `disconnected_at=now`),
+  mirroring `GoogleCalendarToken`.
+- No new migration file: add the table via `Base.metadata.create_all` on the
+  existing SQLite/Postgres path (the codebase already uses create_all for
+  `GoogleCalendarToken`); document it.
+- A single alembic revision may be added later by release-manager; not required
+  for this task (schema_version bump of the workspace JSON doc **is** required —
+  see §5).
+
+---
+
+## 3. Adapter Interface
+
+### 3.1 `AdapterAuth`
 
 ```python
-"""Token-level AES-256-GCM envelope encryption.
+@dataclass(frozen=True)
+class AdapterAuth:
+    """Parsed, decrypted credentials handed to an adapter by the route layer.
 
-Lightweight wrapper around the same DEK/KEK pattern used by
-FileEncryptor (storage/encryption.py) but designed for short strings
-(OAuth access/refresh tokens). Each encrypt() call generates a fresh
-DEK, so compromised ciphertexts do not expose other tokens.
-
-Layout (base64-encoded):
-    MAGIC(b"MNAT1") || wrapped_dek_len(1B) || wrapped_dek || nonce(12B) || ciphertext
-"""
-
-import base64
-import hashlib
-import os
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from meeting_notes_ai.config import settings
-
-MAGIC = b"MNAT1"
-_MAGIC_LEN = 5
-_NONCE_LEN = 12
-_DEK_LEN = 32
-_DEK_AAD = b"MNAT1-DEK"
-_PAYLOAD_AAD = b"MNAT1-PAYLOAD"
-
-
-def _derive_kek(seed: str) -> bytes:
-    return hashlib.sha256(seed.encode("utf-8")).digest()
-
-
-class TokenEncryptor:
-    """AES-256-GCM envelope encryptor for OAuth tokens.
-
-    Uses STORAGE_ENCRYPTION_KEY (or HIPAA_MASTER_KEY) as KEK seed,
-    matching FileEncryptor's key derivation. Tokens are base64-encoded
-    after encryption so they fit cleanly in DB text columns.
+    Each provider stores exactly one secret string in its credential blob:
+      jira    -> access token (OAuth2 Bearer)      | plus site_url, email
+      linear  -> API key (Bearer)                  | plus workspace_url
+      asana   -> PAT (Bearer)                      | plus default_workspace_gid
+      todoist -> REST token (Bearer)               | (account url derived)
     """
-
-    def __init__(self, key: str | None = None) -> None:
-        seed = key or settings.storage_encryption_key or os.getenv("HIPAA_MASTER_KEY", "")
-        if not seed:
-            raise ValueError(
-                "TokenEncryptor requires STORAGE_ENCRYPTION_KEY or HIPAA_MASTER_KEY"
-            )
-        self._kek = _derive_kek(seed)
-
-    def encrypt(self, plaintext: str) -> str:
-        """Encrypt a token string. Returns base64-encoded ciphertext."""
-        dek = os.urandom(_DEK_LEN)
-        nonce = os.urandom(_NONCE_LEN)
-        cipher = AESGCM(dek)
-        wrapped_dek = AESGCM(self._kek).encrypt(nonce, dek, _DEK_AAD)
-        ciphertext = cipher.encrypt(nonce, plaintext.encode("utf-8"), _PAYLOAD_AAD)
-        raw = MAGIC + bytes([len(wrapped_dek)]) + wrapped_dek + nonce + ciphertext
-        return base64.b64encode(raw).decode("ascii")
-
-    def decrypt(self, token_b64: str) -> str:
-        """Decrypt a base64-encoded ciphertext. Returns plaintext string."""
-        raw = base64.b64decode(token_b64)
-        if len(raw) < _MAGIC_LEN + 1 + _NONCE_LEN + 1:
-            raise ValueError("token blob too short")
-        if raw[:_MAGIC_LEN] != MAGIC:
-            raise ValueError("invalid token blob magic")
-        dek_len = raw[_MAGIC_LEN]
-        nonce_start = _MAGIC_LEN + 1 + dek_len
-        wrapped_dek = raw[_MAGIC_LEN + 1 : nonce_start]
-        nonce = raw[nonce_start : nonce_start + _NONCE_LEN]
-        ciphertext = raw[nonce_start + _NONCE_LEN:]
-        dek = AESGCM(self._kek).decrypt(nonce, wrapped_dek, _DEK_AAD)
-        return AESGCM(dek).decrypt(nonce, ciphertext, _PAYLOAD_AAD).decode("utf-8")
+    provider: str
+    token: str                       # decrypted secret, never persisted again
+    site_url: str = ""               # jira: https://<site>.atlassian.net
+    email: str = ""                  # jira/linear/asana display account
+    workspace_url: str = ""          # linear: https://<workspace>.linear.app
+    default_project: str = ""        # optional default project id/gid
 ```
 
-**Design rationale**: Separate from `FileEncryptor` because:
-1. Token encryptor returns strings (base64), not bytes
-2. Different magic (`MNAT1` vs `MNAS1`) for domain separation
-3. Independent lifecycle — token expiry/rotation is independent of file retention
-
-### 2.2 Google Calendar Service
-
-**File**: `src/meeting_notes_ai/services/google_calendar.py`
+### 3.2 `Adapter` ABC
 
 ```python
-"""Google Calendar OAuth2 integration service.
+class Adapter(ABC):
+    provider: ClassVar[str]            # "jira" | "linear" | "asana" | "todoist"
+    display_name: ClassVar[str]        # "Jira" | "Linear" | "Asana" | "Todoist"
+    auth_type: ClassVar[str]           # "oauth2" | "api_key" | "pat" | "rest_token"
+    connect_timeout: ClassVar[float] = 15.0
 
-Handles the full lifecycle: authorization URL generation, token exchange,
-token refresh, event listing, and meeting import. All methods are async
-and tenant-scoped via the user_id parameter.
+    @abstractmethod
+    async def connect(self, auth: AdapterAuth) -> AdapterConnection:
+        """Validate credentials with a lightweight provider call.
 
-Dependencies:
-    pip install google-api-python-client google-auth-oauthlib google-auth-httplib2
-"""
-
-from __future__ import annotations
-
-import logging
-from datetime import datetime, timedelta, timezone
-from typing import Any
-
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import Flow
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
-
-from meeting_notes_ai.config import settings
-from meeting_notes_ai.services.token_encryption import TokenEncryptor
-
-logger = logging.getLogger(__name__)
-
-# Google OAuth2 scopes — minimal for calendar read + event import
-SCOPES = [
-    "https://www.googleapis.com/auth/calendar.readonly",
-]
-
-# Token lifetime safety margin — refresh 5 minutes before expiry
-REFRESH_MARGIN_SECONDS = 300
-
-
-class GoogleCalendarError(Exception):
-    """Base exception for Google Calendar operations."""
-
-
-class TokenExpiredError(GoogleCalendarError):
-    """Raised when tokens cannot be refreshed (user must re-authorize)."""
-
-
-class GoogleCalendarService:
-    """OAuth2 + Calendar API integration for a single user.
-
-    Args:
-        client_id: Google OAuth2 client ID.
-        client_secret: Google OAuth2 client secret.
-        redirect_uri: OAuth2 callback URL.
-        encryptor: TokenEncryptor instance for credential storage.
-    """
-
-    def __init__(
-        self,
-        client_id: str,
-        client_secret: str,
-        redirect_uri: str,
-        encryptor: TokenEncryptor,
-    ) -> None:
-        self.client_id = client_id
-        self.client_secret = client_secret
-        self.redirect_uri = redirect_uri
-        self.encryptor = encryptor
-
-    # ── OAuth2 Flow ────────────────────────────────────────────────────────
-
-    def get_authorization_url(self, state: str) -> str:
-        """Generate the Google OAuth2 authorization URL.
-
-        Args:
-            state: CSRF protection token (opaque string, stored in session).
-
-        Returns:
-            Full Google authorization URL with redirect_uri, scopes, and state.
+        Returns identity + account URL for GET /integrations.
+        Raises PMAdapterError on invalid/expired credentials (401/403),
+        AdapterUnavailableError on provider outages (5xx/timeouts).
         """
-        flow = Flow.from_client_config(
-            {
-                "web": {
-                    "client_id": self.client_id,
-                    "client_secret": self.client_secret,
-                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                    "token_uri": "https://oauth2.googleapis.com/token",
-                    "redirect_uris": [self.redirect_uri],
-                }
-            },
-            scopes=SCOPES,
-            state=state,
-        )
-        flow.redirect_uri = self.redirect_uri
-        authorization_url, _ = flow.authorization_url(
-            access_type="offline",       # request refresh_token
-            prompt="consent",             # force consent to get refresh_token
-            include_granted_scopes="true",
-        )
-        return authorization_url
 
-    async def exchange_code(self, code: str) -> dict[str, Any]:
-        """Exchange an authorization code for access + refresh tokens.
+    @abstractmethod
+    async def create_task(self, action: dict[str, Any], project: str | None = None,
+                          idempotency_key: str | None = None) -> AdapterTaskResult:
+        """Create a real task in the provider.
 
-        Args:
-            code: The authorization code from Google's callback.
-
-        Returns:
-            Dict with keys: access_token, refresh_token, expires_at, token_type, scope.
+        action: workspace action dict (id, title, owner, due, meeting_id, meeting, ...)
+        project: provider project id/key/gid (None -> provider default)
+        idempotency_key: "<meeting_id>:<action_id>" (see §7); None = no header
         """
-        flow = Flow.from_client_config(
-            {
-                "web": {
-                    "client_id": self.client_id,
-                    "client_secret": self.client_secret,
-                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                    "token_uri": "https://oauth2.googleapis.com/token",
-                    "redirect_uris": [self.redirect_uri],
-                }
-            },
-            scopes=SCOPES,
-        )
-        flow.redirect_uri = self.redirect_uri
-        flow.fetch_token(code=code)
 
-        creds = flow.credentials
-        return {
-            "access_token": creds.token,
-            "refresh_token": creds.refresh_token,
-            "expires_at": creds.expiry.isoformat() if creds.expiry else None,
-            "token_type": "Bearer",
-            "scope": creds.scopes or SCOPES,
-        }
-
-    async def refresh_token(self, refresh_token: str) -> dict[str, Any]:
-        """Refresh an expired access token.
-
-        Args:
-            refresh_token: The stored refresh token.
-
-        Returns:
-            Dict with keys: access_token, expires_at, token_type.
-
-        Raises:
-            TokenExpiredError: If refresh fails (token revoked or invalid).
-        """
-        creds = Credentials(
-            token=None,
-            refresh_token=refresh_token,
-            token_uri="https://oauth2.googleapis.com/token",
-            client_id=self.client_id,
-            client_secret=self.client_secret,
-        )
-        try:
-            from google.auth.transport.requests import Request as AuthRequest
-            import asyncio
-            # google-auth transport is sync; run in thread to avoid blocking
-            await asyncio.to_thread(creds.refresh, AuthRequest())
-        except Exception as exc:
-            logger.warning("Google token refresh failed: %s", exc)
-            raise TokenExpiredError(
-                "Could not refresh Google token. Please re-authorize."
-            ) from exc
-
-        return {
-            "access_token": creds.token,
-            "expires_at": creds.expiry.isoformat() if creds.expiry else None,
-            "token_type": "Bearer",
-        }
-
-    # ── Calendar API ───────────────────────────────────────────────────────
-
-    async def list_events(
-        self,
-        access_token: str,
-        refresh_token: str,
-        calendar_id: str = "primary",
-        days_ahead: int = 7,
-    ) -> list[dict[str, Any]]:
-        """List upcoming calendar events for the next N days.
-
-        Automatically refreshes the token if expired.
-
-        Args:
-            access_token: Current access token.
-            refresh_token: Refresh token for automatic renewal.
-            calendar_id: Google Calendar ID (default: "primary").
-            days_ahead: How many days ahead to look (default: 7).
-
-        Returns:
-            List of event dicts with: id, summary, description, start, end,
-            attendees, location, meet_link, organizer, calendar_id.
-        """
-        creds = self._build_credentials(access_token, refresh_token)
-
-        now = datetime.now(timezone.utc)
-        time_max = now + timedelta(days=days_ahead)
-
-        try:
-            service = await asyncio.to_thread(
-                lambda: build("calendar", "v3", credentials=creds)
-            )
-            result = await asyncio.to_thread(
-                lambda: service.events()
-                .list(
-                    calendarId=calendar_id,
-                    timeMin=now.isoformat(),
-                    timeMax=time_max.isoformat(),
-                    maxResults=100,
-                    singleEvents=True,
-                    orderBy="startTime",
-                )
-                .execute()
-            )
-        except HttpError as exc:
-            if exc.resp.status == 401:
-                # Token might need refresh — caller should retry after refresh
-                raise TokenExpiredError("Calendar API returned 401") from exc
-            raise GoogleCalendarError(f"Calendar API error: {exc}") from exc
-
-        events = result.get("items", [])
-        return [self._normalize_event(e) for e in events]
-
-    async def get_event(
-        self,
-        access_token: str,
-        refresh_token: str,
-        calendar_id: str,
-        event_id: str,
-    ) -> dict[str, Any]:
-        """Fetch a single calendar event by ID.
-
-        Args:
-            access_token: Current access token.
-            refresh_token: Refresh token.
-            calendar_id: Google Calendar ID.
-            event_id: Google Calendar event ID.
-
-        Returns:
-            Normalized event dict.
-        """
-        creds = self._build_credentials(access_token, refresh_token)
-
-        try:
-            service = await asyncio.to_thread(
-                lambda: build("calendar", "v3", credentials=creds)
-            )
-            event = await asyncio.to_thread(
-                lambda: service.events()
-                .get(calendarId=calendar_id, eventId=event_id)
-                .execute()
-            )
-        except HttpError as exc:
-            if exc.resp.status == 401:
-                raise TokenExpiredError("Calendar API returned 401") from exc
-            raise GoogleCalendarError(f"Calendar API error: {exc}") from exc
-
-        return self._normalize_event(event)
-
-    # ── Helpers ────────────────────────────────────────────────────────────
-
-    def _build_credentials(
-        self, access_token: str, refresh_token: str
-    ) -> Credentials:
-        """Build a Google Credentials object from stored tokens."""
-        return Credentials(
-            token=access_token,
-            refresh_token=refresh_token,
-            token_uri="https://oauth2.googleapis.com/token",
-            client_id=self.client_id,
-            client_secret=self.client_secret,
-        )
-
-    def _normalize_event(self, raw: dict[str, Any]) -> dict[str, Any]:
-        """Normalize a Google Calendar event into a flat dict."""
-        start = raw.get("start", {})
-        end = raw.get("end", {})
-        # Extract Google Meet link from conferenceData
-        meet_link = None
-        conf = raw.get("conferenceData", {})
-        if conf:
-            for entry in conf.get("entryPoints", []):
-                if entry.get("entryPointType") == "video":
-                    meet_link = entry.get("uri")
-                    break
-
-        return {
-            "id": raw.get("id", ""),
-            "summary": raw.get("summary", "Untitled"),
-            "description": raw.get("description", ""),
-            "start": start.get("dateTime") or start.get("date", ""),
-            "end": end.get("dateTime") or end.get("date", ""),
-            "attendees": [
-                {
-                    "email": a.get("email", ""),
-                    "displayName": a.get("displayName", ""),
-                    "responseStatus": a.get("responseStatus", ""),
-                }
-                for a in raw.get("attendees", [])
-            ],
-            "location": raw.get("location", ""),
-            "meet_link": meet_link,
-            "organizer": {
-                "email": raw.get("organizer", {}).get("email", ""),
-                "displayName": raw.get("organizer", {}).get("displayName", ""),
-            },
-            "calendar_id": raw.get("organizer", {}).get("calendarId", "primary"),
-            "html_link": raw.get("htmlLink", ""),
-        }
+    async def healthcheck(self, auth: AdapterAuth) -> bool:
+        """Optional; default True. Implementations may probe /status."""
 ```
 
-**Key design decisions**:
+### 3.3 Result types
 
-1. **`asyncio.to_thread` for Google SDK calls** — The google-api-python-client is
-   synchronous. All calls are wrapped in `to_thread` to avoid blocking the FastAPI
-   event loop, matching the pattern in `auth.py` (`hash_password`).
+```python
+@dataclass(frozen=True)
+class AdapterConnection:
+    account_email: str
+    account_url: str
+    token_expires_at: str | None = None   # ISO-8601 UTC; None = non-expiring token
 
-2. **Automatic token refresh** — The `list_events` / `get_event` methods accept
-   both access and refresh tokens. If the access token is expired, `Credentials`
-   handles refresh transparently. If refresh fails, `TokenExpiredError` is raised
-   so the caller can prompt re-authorization.
+@dataclass(frozen=True)
+class AdapterTaskResult:
+    external_id: str      # provider's native task id (Jira issue key, Linear UUID,
+                          # Asana task gid, Todoist task id)
+    external_url: str     # https link a human can open
+    raw: dict[str, Any] = field(default_factory=dict)  # provider response, for tests/debug
+```
 
-3. **`_normalize_event`** — Flattens Google's nested event structure into a clean
-   dict that maps directly to Pydantic response models.
+### 3.4 Registry
 
-4. **Client config as dict** — Rather than using `client_secrets.json` file, we
-   pass the config as a dict built from environment variables. This avoids
-   filesystem dependency and matches the app's env-var config pattern.
+```python
+PROVIDER_REGISTRY: dict[str, type[Adapter]] = {
+    "jira": JiraAdapter, "linear": LinearAdapter,
+    "asana": AsanaAdapter, "todoist": TodoistAdapter,
+}
+
+def get_adapter(provider: str) -> Adapter: ...   # raises KeyError -> route maps to 404
+
+PM_PROVIDERS = frozenset({"jira", "linear", "asana", "todoist"})
+```
+
+### 3.5 Exceptions
+
+```python
+class PMAdapterError(Exception):          # base; message is ALWAYS safe to show
+class AdapterAuthError(PMAdapterError):   # 401/403 -> HTTP 401 "re-authorize"
+class AdapterUnavailableError(PMAdapterError):  # 5xx/timeout -> HTTP 502 friendly retry
+class AdapterValidationError(PMAdapterError):   # 400/422 (bad project, missing field) -> HTTP 422
+class AdapterNotFoundError(PMAdapterError):     # unknown provider -> HTTP 404
+```
+
+Every adapter maps provider responses through `ProviderHTTPError` →
+one of the above. **Never** raise a raw `httpx.HTTPError` or `ProviderHTTPError`
+out of an adapter — the route layer only knows the `PMAdapterError` family.
+
+### 3.6 Why this interface
+
+- `connect(auth)` and `create_task(action, project)` are the exact signatures
+  the parent task mandates and the pre-tester will assert.
+- Adapters are stateless objects; the route layer owns decryption and passes
+  `AdapterAuth`. This keeps adapters trivially unit-testable with transport
+  mocks and avoids hidden DB state inside adapters.
+- `idempotency_key` is a parameter (not adapter state) so the route layer can
+  derive it from the workspace document without coupling adapters to the doc.
 
 ---
 
-## 3. Data Model
+## 4. Provider Credential Flows
 
-### New model: `GoogleCalendarToken`
+### 4.1 Jira — OAuth2 (authorization code) with JWT-basic fallback
 
-**File**: `src/meeting_notes_ai/db/models.py` (append to existing file)
+Primary: **OAuth2 authorization-code** (Atlassian). Admin-created OAuth
+consumer → client id/secret at `https://<site>.atlassian.net/plugins/servlet/ac/...`
+per site. Cloud OAuth2 (marketplace-style) is an acceptable alternative when a
+site-level consumer is unavailable; both share the same endpoints.
 
-```python
-class GoogleCalendarToken(Base, TimestampMixin):
-    """Encrypted OAuth2 tokens for Google Calendar integration.
+- Auth URL (per site):
+  `https://auth.atlassian.com/authorize?audience=api.atlassian.com&client_id={id}&scope=read:jira-user+read:jira-work+write:jira-work+offline_access&redirect_uri={redirect}&state={state}&prompt=consent`
+- Token exchange (per site): `POST https://auth.atlassian.com/oauth/token`
+  with `grant_type=authorization_code`, `code`, `client_id`, `client_secret`,
+  `redirect_uri`.
+- Refresh: same endpoint, `grant_type=refresh_token`.
+- Base URL resolution: `GET https://api.atlassian.com/oauth/token/accessible-resources`
+  with the access token → `[{id, url, name}]`; store `url` as `site_url`
+  (e.g. `https://acme.atlassian.net`).
+- API: `GET/POST {site_url}/rest/api/3/...` with `Authorization: Bearer {token}`.
+- Token expiry: access tokens ~1h; store `token_expires_at`, auto-refresh with
+  a 5-minute margin exactly like `google_calendar.py` (`REFRESH_MARGIN_SECONDS`).
+- `connect()`: `GET {site_url}/rest/api/3/myself` → `{accountId, emailAddress, displayName}`.
+- `create_task()`: `POST {site_url}/rest/api/3/issue`
+  ```json
+  { "fields": { "project": {"key": "<project>"},
+                "summary": "<action title>",
+                "description": "<generated description>",
+                "issuetype": {"name": "Task"},
+                "assignee": {"accountId": "<owner account id or null>"},
+                "duedate": "<YYYY-MM-DD or null>" } }
+  ```
+  → `201 {"id": "...", "key": "ACME-123", "self": "..."}`;
+  `external_url = f"{site_url}/browse/{key}"`.
+- `idempotency_key` → header `X-Idempotency-Key` (Jira accepts it; safe to send).
 
-    One row per user. Tokens are encrypted with AES-256-GCM via
-    TokenEncryptor before storage. The refresh_token is encrypted
-    separately because it's the long-lived credential.
+Fallback (documented, admin-configured only): **JWT basic auth** for Jira
+Server/DC — `Authorization: Basic base64(email:api_token)`, API token from
+`https://id.atlassian.com/manage-profile/security/api-tokens`, base URL from
+env `JIRA_SITE_URL`. Chosen when the credential blob contains `api_token`
+instead of an OAuth token. Same `rest/api/3` calls; no expiry (`token_expires_at=None`).
 
-    Access tokens expire after 1 hour; the service layer handles
-    transparent refresh using the stored refresh_token.
-    """
-    __tablename__ = "google_calendar_tokens"
+### 4.2 Linear — API key (personal)
 
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
-    )
-    user_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("users.id"), unique=True, nullable=False, index=True
-    )
-    encrypted_access_token: Mapped[str] = mapped_column(Text, nullable=False)
-    encrypted_refresh_token: Mapped[str] = mapped_column(Text, nullable=False)
-    token_expires_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    scope: Mapped[str] = mapped_column(String(500), nullable=False, default="")
-    calendar_id: Mapped[str] = mapped_column(
-        String(255), nullable=False, default="primary"
-    )
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    disconnected_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+- Key from Linear app → Settings → Security & access → Personal API keys.
+- API: `POST https://api.linear.app/graphql` with `Authorization: {key}` (no
+  "Bearer" prefix — Linear accepts the raw key).
+- `connect()`: `POST /graphql` `{ viewer { id name email } organization { urlKey } }`
+  → account_email, `workspace_url = https://{urlKey}.linear.app`.
+- `create_task()`: GraphQL mutation
+  ```graphql
+  mutation CreateIssue($input: IssueCreateInput!) {
+    issueCreate(input: $input) { success issue { id identifier url } } }
+  ```
+  variables:
+  ```json
+  { "input": { "teamId": "<project>",
+               "title": "<action title>",
+               "description": "<generated description>",
+               "assigneeId": "<owner id or null>",
+               "dueDate": "<YYYY-MM-DD or null>" } }
+  ```
+  → `issue.id` (UUID) → `external_id`; `issue.url` → `external_url`.
+  `project` = **teamId** (Linear teams are the project scope).
+- `idempotency_key` → header `Idempotency-Key` (Linear API v1+ supports it).
+- Tokens never expire (`token_expires_at=None`).
 
-    # Relationships
-    user: Mapped["User"] = relationship()
+### 4.3 Asana — Personal Access Token (PAT)
+
+- PAT from Asana developer console (`https://app.asana.com/0/my-apps` → Create
+  new token). Scopes are implicit on the PAT; no OAuth needed for v1.
+- API: `https://app.asana.com/api/1.0/...` with `Authorization: Bearer {pat}`.
+- `connect()`: `GET /users/me` → `{data: {gid, email, name}}`; also fetch
+  `GET /workspaces` → store first workspace gid as `default_project`.
+- `create_task()`: `POST /tasks` with
+  `{ "data": { "workspace": "<workspace gid>", "projects": ["<project gid>"] (if given),
+               "name": "<action title>", "notes": "<generated description>",
+               "assignee": "<owner gid or null>", "due_on": "<YYYY-MM-DD or null>" } }`
+  → `201 {"data": {"gid": "...", "permalink_url": "..."}}` →
+  `external_id = gid`, `external_url = permalink_url`.
+- `idempotency_key` → header `Idempotency-Key` (Asana supports it, 48h window).
+- Tokens never expire (`token_expires_at=None`).
+
+### 4.4 Todoist — REST token
+
+- Token from Todoist app → Settings → Integrations → API token.
+- API: `https://api.todoist.com/rest/v2/...` with `Authorization: Bearer {token}`.
+- `connect()`: `GET /projects` (and `GET /user` for email) →
+  account_email, `account_url = https://todoist.com`.
+- `create_task()`: `POST /tasks`
+  ```json
+  { "content": "<action title>",
+    "description": "<generated description>",
+    "project_id": "<project id or null>",
+    "due_string": "<owner due or null>",
+    "due_lang": "en" }
+  ```
+  → `200 {"id": "...", "url": "https://todoist.com/showTask?id=..."}` →
+  `external_id = id`, `external_url = url`.
+- `idempotency_key` → header `X-Idempotency-Key` (Todoist REST v2 honors it).
+- Tokens never expire (`token_expires_at=None`).
+
+### 4.5 Credential flow state machine (all providers)
+
+```
+[idle] --POST /integrations/{provider}/auth--> [awaiting_callback]   (oauth2 only)
+        --POST /integrations/{provider}/connect {credentials}--> [connected]
+
+[awaiting_callback] --GET /integrations/{provider}/callback?code=&state=--> [connected]
+
+[connected] --POST /integrations/{provider}/disconnect--> [idle]
+
+[connected] --connect() 401/403--> [needs_reauth]  (auth_error: true, 401 on API calls)
 ```
 
-**Design notes**:
-
-- `unique=True` on `user_id` — one Google account per user (matches the 1:1
-  pattern of OAuth integrations). To support multiple Google accounts, remove
-  unique constraint and add a `provider_account_id` column.
-- `encrypted_access_token` and `encrypted_refresh_token` — stored as base64
-  strings from `TokenEncryptor.encrypt()`.
-- `token_expires_at` — cached from the token exchange response for fast
-  "is token expired?" checks without decrypting.
-- `is_active` / `disconnected_at` — soft-delete when user disconnects, preserving
-  audit trail. A disconnected integration won't appear in event queries.
-
-### Modified model: `Meeting`
-
-Add columns to the existing `Meeting` model to link imported calendar events:
-
-```python
-# Add to Meeting class:
-google_calendar_event_id: Mapped[Optional[str]] = mapped_column(
-    String(255), nullable=True, index=True, unique=True
-)
-google_calendar_id: Mapped[Optional[str]] = mapped_column(
-    String(255), nullable=True
-)
-source: Mapped[str] = mapped_column(
-    String(50), nullable=False, default="upload"
-    # Values: "upload", "live", "calendar_import"
-)
-```
-
-**Design rationale**:
-
-- `google_calendar_event_id` with `unique=True` prevents duplicate imports of
-  the same event.
-- `source` field on all meetings enables the UI to show where a meeting came
-  from. Existing rows default to `"upload"`.
-
-### Alembic Migration
-
-```python
-# alembic/versions/0xx_add_google_calendar_integration.py
-
-"""Add Google Calendar integration tables and meeting source tracking.
-
-Revision ID: 0xx
-Revises: <previous>
-Create Date: 2026-08-06
-"""
-from alembic import op
-import sqlalchemy as sa
-
-revision = "0xx"
-down_revision = "<previous>"
-branch_labels = None
-depends_on = None
-
-
-def upgrade() -> None:
-    # GoogleCalendarToken table
-    op.create_table(
-        "google_calendar_tokens",
-        sa.Column("id", sa.String(36), primary_key=True),
-        sa.Column("user_id", sa.String(36), sa.ForeignKey("users.id"),
-                  unique=True, nullable=False, index=True),
-        sa.Column("encrypted_access_token", sa.Text, nullable=False),
-        sa.Column("encrypted_refresh_token", sa.Text, nullable=False),
-        sa.Column("token_expires_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("scope", sa.String(500), nullable=False, server_default=""),
-        sa.Column("calendar_id", sa.String(255), nullable=False, server_default="primary"),
-        sa.Column("is_active", sa.Boolean, nullable=False, server_default=sa.text("true")),
-        sa.Column("disconnected_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=True),
-    )
-
-    # Meeting source tracking columns
-    op.add_column(
-        "meetings",
-        sa.Column("google_calendar_event_id", sa.String(255), nullable=True),
-    )
-    op.add_column(
-        "meetings",
-        sa.Column("google_calendar_id", sa.String(255), nullable=True),
-    )
-    op.add_column(
-        "meetings",
-        sa.Column("source", sa.String(50), nullable=False, server_default="upload"),
-    )
-    op.create_index(
-        "ix_meetings_google_calendar_event_id",
-        "meetings",
-        ["google_calendar_event_id"],
-        unique=True,
-    )
-
-
-def downgrade() -> None:
-    op.drop_index("ix_meetings_google_calendar_event_id", table_name="meetings")
-    op.drop_column("meetings", "source")
-    op.drop_column("meetings", "google_calendar_id")
-    op.drop_column("meetings", "google_calendar_event_id")
-    op.drop_table("google_calendar_tokens")
-```
+- **API-key providers (linear, asana, todoist)**: single step. Frontend shows
+  an inline form (key/PAT/token input + optional default project), submits to
+  `POST /integrations/{provider}/connect`, backend calls `connect(auth)` to
+  validate, stores encrypted, returns the connection.
+- **OAuth2 provider (jira)**: two steps. `POST /integrations/jira/auth` returns
+  `authorization_url` + `state` (state persisted in `OAuthState` with
+  `provider="jira"`); callback exchanges, resolves `site_url`, stores tokens,
+  flips the workspace doc to connected.
+- **JWT-basic fallback (jira)**: single step like the API-key providers, via
+  `POST /integrations/jira/connect` with `{credentials: {api_token, email, site_url}}`.
+- Connect is **idempotent**: re-connecting overwrites the credential row and
+  workspace doc entry (upsert semantics).
 
 ---
 
-## 4. API Contract
+## 5. Data Model & Persistence
 
-### New router
+### 5.1 Workspace document (`data/workspace_state.json`, schema_version 2 → 3)
 
-**File**: `src/meeting_notes_ai/routes/google_calendar.py`
-
-```
-POST   /api/v1/integrations/google-calendar/auth
-GET    /api/v1/integrations/google-calendar/callback
-GET    /api/v1/integrations/google-calendar/events
-POST   /api/v1/integrations/google-calendar/import/{event_id}
-GET    /api/v1/integrations/google-calendar/status
-DELETE /api/v1/integrations/google-calendar/disconnect
-```
-
-All endpoints require `get_current_user` (JWT or API key) and are
-tenant-scoped via `user["user_id"]`.
-
-### 4.1 POST /api/v1/integrations/google-calendar/auth
-
-**Purpose**: Generate Google OAuth2 authorization URL.
-
-**Request body**: None (token in header)
-
-**Response** (200):
+The `_seed_workspace` integrations dict (workspace.py:38-41) changes to a
+canonical catalog. **Existing keys are preserved**; the four PM providers gain
+real state, the three legacy connectors keep the old shape.
 
 ```json
-{
-  "authorization_url": "https://accounts.google.com/o/oauth2/auth?client_id=...&state=...",
-  "state": "csrf-token-abc123"
+"integrations": {
+  "Jira":      {"connected": false, "provider": "jira",      "mode": "adapter_required"},
+  "Linear":    {"connected": false, "provider": "linear",    "mode": "adapter_required"},
+  "Asana":     {"connected": false, "provider": "asana",     "mode": "adapter_required"},
+  "Todoist":   {"connected": false, "provider": "todoist",   "mode": "adapter_required"},
+  "Microsoft Planner": {"connected": false, "mode": "adapter_required"},
+  "Salesforce":        {"connected": false, "mode": "adapter_required"},
+  "Slack":             {"connected": false, "mode": "adapter_required"}
 }
 ```
 
-**Pydantic models**:
-
-```python
-class CalendarAuthResponse(BaseModel):
-    authorization_url: str = Field(..., description="Google OAuth2 consent URL")
-    state: str = Field(..., description="CSRF state token for callback verification")
-```
-
-**Implementation**:
-
-```python
-@router.post("/auth", response_model=CalendarAuthResponse)
-async def google_calendar_auth(user: dict[str, Any] = Depends(get_current_user)):
-    state = secrets.token_urlsafe(32)
-    # Store state in session/DB for callback verification
-    service = _get_calendar_service()
-    url = service.get_authorization_url(state=state)
-    # Persist state → user_id mapping (short-lived, 10 min TTL)
-    await _store_oauth_state(state, user["user_id"])
-    return CalendarAuthResponse(authorization_url=url, state=state)
-```
-
-### 4.2 GET /api/v1/integrations/google-calendar/callback
-
-**Purpose**: Handle Google OAuth2 callback, exchange code, store tokens.
-
-**Query parameters**:
-- `code` (string): Authorization code from Google
-- `state` (string): CSRF state token
-
-**Response** (200):
+Connected PM entries additionally carry (written on connect, cleared on
+disconnect):
 
 ```json
-{
-  "connected": true,
-  "calendar_id": "primary",
-  "expires_at": "2026-08-06T15:30:00Z"
+"Jira": {
+  "connected": true, "provider": "jira", "mode": "adapter_required",
+  "account_email": "maya@acme.com", "account_url": "https://acme.atlassian.net",
+  "token_expires_at": "2026-08-07T10:00:00+00:00"
 }
 ```
 
-**Pydantic models**:
+The DB row (`pm_integration_tokens`) is the **source of truth** for credentials;
+the workspace doc mirrors connection metadata for the UI and the existing
+`GET /integrations` contract. `_read_document` upgrades v2 → v3 on read
+(backfill the four PM entries if absent; never drop legacy keys).
 
-```python
-class CalendarCallbackResponse(BaseModel):
-    connected: bool = Field(default=True)
-    calendar_id: str = Field(default="primary")
-    expires_at: datetime | None = Field(default=None)
-```
+### 5.2 Action record
 
-**Error responses**:
-- `400`: Invalid or expired state token
-- `400`: Code exchange failed
-- `500`: Token storage failed
-
-**Implementation**:
-
-```python
-@router.get("/callback", response_model=CalendarCallbackResponse)
-async def google_calendar_callback(
-    code: str = Query(...),
-    state: str = Query(...),
-    db: AsyncSession = Depends(get_db_session),
-):
-    # 1. Verify state token
-    user_id = await _verify_oauth_state(state)
-    if not user_id:
-        raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
-
-    # 2. Exchange code for tokens
-    service = _get_calendar_service()
-    tokens = await service.exchange_code(code)
-
-    # 3. Encrypt and store tokens
-    encryptor = TokenEncryptor()
-    token_data = GoogleCalendarToken(
-        user_id=user_id,
-        encrypted_access_token=encryptor.encrypt(tokens["access_token"]),
-        encrypted_refresh_token=encryptor.encrypt(tokens["refresh_token"]),
-        token_expires_at=tokens["expires_at"],
-        scope=",".join(tokens.get("scope", [])),
-        is_active=True,
-    )
-
-    # Upsert: if user already has a token, update it
-    existing = await db.execute(
-        select(GoogleCalendarToken).where(
-            GoogleCalendarToken.user_id == user_id,
-            GoogleCalendarToken.is_active.is_(True),
-        )
-    )
-    record = existing.scalar_one_or_none()
-    if record:
-        record.encrypted_access_token = token_data.encrypted_access_token
-        record.encrypted_refresh_token = token_data.encrypted_refresh_token
-        record.token_expires_at = token_data.token_expires_at
-        record.scope = token_data.scope
-        record.is_active = True
-        record.disconnected_at = None
-    else:
-        db.add(token_data)
-
-    await db.flush()
-    return CalendarCallbackResponse(
-        connected=True,
-        calendar_id="primary",
-        expires_at=tokens.get("expires_at"),
-    )
-```
-
-### 4.3 GET /api/v1/integrations/google-calendar/events
-
-**Purpose**: List upcoming events (next 7 days).
-
-**Query parameters**:
-- `days` (int, optional, default=7): Days ahead to look
-- `calendar_id` (string, optional, default="primary"): Calendar to query
-
-**Response** (200):
+`queue_action` (and `create_meeting` seeding, workspace.py:240) adds two fields
+to every action dict:
 
 ```json
-{
-  "events": [
-    {
-      "id": "abc123",
-      "summary": "Q3 Planning",
-      "description": "Review quarterly goals",
-      "start": "2026-08-07T10:00:00+02:00",
-      "end": "2026-08-07T11:00:00+02:00",
-      "attendees": [
-        {
-          "email": "alice@example.com",
-          "displayName": "Alice",
-          "responseStatus": "accepted"
-        }
-      ],
-      "location": "Conference Room A",
-      "meet_link": "https://meet.google.com/abc-defg-hij",
-      "organizer": {
-        "email": "bob@example.com",
-        "displayName": "Bob"
-      },
-      "calendar_id": "primary",
-      "html_link": "https://calendar.google.com/calendar/event?eid=...",
-      "imported": false
-    }
-  ],
-  "calendar_id": "primary",
-  "days": 7
-}
+"external_id":  null,     // already seeded
+"external_url": null,     // NEW
 ```
 
-**Pydantic models**:
+`adapter_job_id` is **removed** from the write path for the four PM providers
+(legacy connector path may keep it). `sync_state` is derived, never stored:
+`queued` + `external_id` set ⇒ `task-synced`.
 
-```python
-class CalendarAttendee(BaseModel):
-    email: str
-    display_name: str = ""
-    response_status: str = ""
+### 5.3 Migrations
 
-class CalendarOrganizer(BaseModel):
-    email: str = ""
-    display_name: str = ""
-
-class CalendarEvent(BaseModel):
-    id: str
-    summary: str
-    description: str = ""
-    start: str
-    end: str
-    attendees: list[CalendarAttendee] = Field(default_factory=list)
-    location: str = ""
-    meet_link: str | None = None
-    organizer: CalendarOrganizer = Field(default_factory=CalendarOrganizer)
-    calendar_id: str = "primary"
-    html_link: str = ""
-    imported: bool = False  # True if this event already has a meeting record
-
-class CalendarEventsResponse(BaseModel):
-    events: list[CalendarEvent]
-    calendar_id: str = "primary"
-    days: int = 7
-```
-
-**Implementation**:
-
-```python
-@router.get("/events", response_model=CalendarEventsResponse)
-async def list_calendar_events(
-    days: int = Query(default=7, ge=1, le=30),
-    calendar_id: str = Query(default="primary"),
-    user: dict[str, Any] = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session),
-):
-    # 1. Load and decrypt tokens
-    token_record = await _load_user_token(db, user["user_id"])
-    if not token_record:
-        raise HTTPException(status_code=409, detail="Google Calendar not connected")
-
-    encryptor = TokenEncryptor()
-    access_token = encryptor.decrypt(token_record.encrypted_access_token)
-    refresh_token = encryptor.encrypt(token_record.encrypted_refresh_token)
-
-    # 2. Auto-refresh if expired
-    if token_record.token_expires_at and token_record.token_expires_at <= datetime.now(timezone.utc):
-        service = _get_calendar_service()
-        refreshed = await service.refresh_token(refresh_token)
-        access_token = refreshed["access_token"]
-        token_record.encrypted_access_token = encryptor.encrypt(access_token)
-        token_record.token_expires_at = datetime.fromisoformat(refreshed["expires_at"])
-        await db.flush()
-
-    # 3. Fetch events
-    service = _get_calendar_service()
-    events = await service.list_events(
-        access_token=access_token,
-        refresh_token=refresh_token,
-        calendar_id=calendar_id,
-        days_ahead=days,
-    )
-
-    # 4. Mark already-imported events
-    imported_ids = await _get_imported_event_ids(db, user["user_id"])
-    for event in events:
-        event["imported"] = event["id"] in imported_ids
-
-    return CalendarEventsResponse(
-        events=[CalendarEvent(**e) for e in events],
-        calendar_id=calendar_id,
-        days=days,
-    )
-```
-
-### 4.4 POST /api/v1/integrations/google-calendar/import/{event_id}
-
-**Purpose**: Create a meeting record from a calendar event.
-
-**Path parameters**:
-- `event_id` (string): Google Calendar event ID
-
-**Request body**: None (optional `calendar_id` in query)
-
-**Query parameters**:
-- `calendar_id` (string, optional, default="primary")
-
-**Response** (201):
-
-```json
-{
-  "meeting": {
-    "id": "uuid-uuid-uuid",
-    "title": "Q3 Planning",
-    "source": "calendar_import",
-    "google_calendar_event_id": "abc123",
-    "date": "2026-08-07T10:00:00+02:00",
-    "duration": "1h",
-    "participants": 3,
-    "review_status": "needs_review",
-    "calendar_context": {
-      "attendees": ["alice@example.com", "bob@example.com"],
-      "location": "Conference Room A",
-      "meet_link": "https://meet.google.com/abc-defg-hij",
-      "description": "Review quarterly goals"
-    }
-  }
-}
-```
-
-**Pydantic models**:
-
-```python
-class CalendarContext(BaseModel):
-    attendees: list[str] = Field(default_factory=list)
-    location: str = ""
-    meet_link: str | None = None
-    description: str = ""
-
-class CalendarImportResponse(BaseModel):
-    meeting: dict[str, Any]  # Full meeting record
-```
-
-**Error responses**:
-- `404`: Event not found in Google Calendar
-- `409`: Event already imported (`google_calendar_event_id` already exists)
-- `409`: Google Calendar not connected
-
-**Implementation**:
-
-```python
-@router.post("/import/{event_id}", response_model=CalendarImportResponse, status_code=201)
-async def import_calendar_event(
-    event_id: str,
-    calendar_id: str = Query(default="primary"),
-    user: dict[str, Any] = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session),
-):
-    # 1. Check for duplicate import
-    existing = await db.execute(
-        select(Meeting).where(
-            Meeting.google_calendar_event_id == event_id,
-            Meeting.user_id == user["user_id"],
-        )
-    )
-    if existing.scalar_one_or_none():
-        raise HTTPException(status_code=409, detail="This event has already been imported")
-
-    # 2. Load tokens and fetch event
-    token_record = await _load_user_token(db, user["user_id"])
-    if not token_record:
-        raise HTTPException(status_code=409, detail="Google Calendar not connected")
-
-    encryptor = TokenEncryptor()
-    access_token = encryptor.decrypt(token_record.encrypted_access_token)
-    refresh_token = encryptor.decrypt(token_record.encrypted_refresh_token)
-
-    service = _get_calendar_service()
-    event = await service.get_event(
-        access_token=access_token,
-        refresh_token=refresh_token,
-        calendar_id=calendar_id,
-        event_id=event_id,
-    )
-
-    # 3. Build meeting record
-    start_dt = datetime.fromisoformat(event["start"]) if event["start"] else datetime.now(timezone.utc)
-    attendees = [a["email"] for a in event.get("attendees", []) if a.get("email")]
-
-    meeting = Meeting(
-        title=event.get("summary", "Imported meeting"),
-        user_id=user["user_id"],
-        filename=f"calendar_{event_id}.txt",
-        mode="general",
-        transcript="",  # No transcript yet — this is a pre-meeting import
-        action_items=json.dumps([]),
-        decisions=json.dumps([]),
-        key_points=json.dumps([]),
-        metadata_json=json.dumps({
-            "calendar_import": True,
-            "original_event": event,
-        }),
-        google_calendar_event_id=event_id,
-        google_calendar_id=calendar_id,
-        source="calendar_import",
-        filename=f"calendar_{event_id}.txt",
-    )
-
-    db.add(meeting)
-    await db.flush()
-
-    # 4. Build response
-    duration = ""
-    if event.get("start") and event.get("end"):
-        start = datetime.fromisoformat(event["start"])
-        end = datetime.fromisoformat(event["end"])
-        delta = end - start
-        hours = int(delta.total_seconds() // 3600)
-        mins = int((delta.total_seconds() % 3600) // 60)
-        duration = f"{hours}h {mins}m" if mins else f"{hours}h"
-
-    return CalendarImportResponse(
-        meeting={
-            "id": meeting.id,
-            "title": meeting.title,
-            "source": meeting.source,
-            "google_calendar_event_id": event_id,
-            "date": event.get("start", ""),
-            "duration": duration,
-            "participants": len(attendees),
-            "review_status": "needs_review",
-            "calendar_context": {
-                "attendees": attendees,
-                "location": event.get("location", ""),
-                "meet_link": event.get("meet_link"),
-                "description": event.get("description", ""),
-            },
-        }
-    )
-```
-
-### 4.5 GET /api/v1/integrations/google-calendar/status
-
-**Purpose**: Check connection status for the current user.
-
-**Response** (200):
-
-```json
-{
-  "connected": true,
-  "calendar_id": "primary",
-  "connected_at": "2026-08-06T12:00:00Z",
-  "token_expires_at": "2026-08-06T13:00:00Z",
-  "needs_reauth": false
-}
-```
-
-```python
-class CalendarStatusResponse(BaseModel):
-    connected: bool
-    calendar_id: str = "primary"
-    connected_at: datetime | None = None
-    token_expires_at: datetime | None = None
-    needs_reauth: bool = False  # True if refresh token is invalid
-```
-
-### 4.6 DELETE /api/v1/integrations/google-calendar/disconnect
-
-**Purpose**: Disconnect Google Calendar (soft-delete tokens).
-
-**Response** (204): No content
-
-**Implementation**:
-
-```python
-@router.delete("/disconnect", status_code=204)
-async def disconnect_google_calendar(
-    user: dict[str, Any] = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session),
-):
-    result = await db.execute(
-        select(GoogleCalendarToken).where(
-            GoogleCalendarToken.user_id == user["user_id"],
-            GoogleCalendarToken.is_active.is_(True),
-        )
-    )
-    record = result.scalar_one_or_none()
-    if record:
-        record.is_active = False
-        record.disconnected_at = datetime.now(timezone.utc)
-        await db.flush()
-```
-
-### Router registration
-
-In `src/meeting_notes_ai/main.py`, add:
-
-```python
-from meeting_notes_ai.routes import google_calendar
-app.include_router(google_calendar.router)
-```
+- `pm_integration_tokens` table: `Base.metadata.create_all` path (matches
+  `GoogleCalendarToken`); optional alembic revision deferred to release-manager.
+- Workspace JSON doc: schema_version 2 → 3 with read-time backfill (§5.1).
+- No columns change on existing tables.
 
 ---
 
-## 5. Security Design
+## 6. API Contract
 
-### 5.1 Token Encryption at Rest
+All routes below are under `get_current_user`; all bodies are JSON; all
+timestamps ISO-8601 UTC. Provider identifiers are **lowercase slugs**
+(`jira`, `linear`, `asana`, `todoist`) in path params, while the workspace
+doc/UI keeps display names (`Jira`, ...). Route layer maps both directions.
 
-- Access and refresh tokens are encrypted with AES-256-GCM before DB storage
-- Uses the same `STORAGE_ENCRYPTION_KEY` / `HIPAA_MASTER_KEY` as file encryption
-- Each token gets a fresh random DEK (compromised ciphertext ≠ compromised key)
-- Domain-separated magic (`MNAT1` vs `MNAS1`) prevents cross-domain decryption
-- Base64 encoding keeps encrypted tokens in text-safe DB columns
+### 6.1 `GET /api/v1/workspace/integrations` (unchanged path, new shape)
 
-### 5.2 OAuth2 CSRF Protection
+Response — `200`:
 
-- `state` parameter is a `secrets.token_urlsafe(32)` value
-- Stored with the user's ID and a 10-minute TTL in a `oauth_states` table
-- Verified on callback; invalid/expired state returns `400`
-- State is single-use: deleted after successful exchange
-
-### 5.3 SSRF Protection
-
-Google API URLs are validated via `SSRFProtector` (existing `security.py`):
-
-```python
-from meeting_notes_ai.security import SSRFProtector
-
-_protector = SSRFProtector()
-
-# Before any API call to Google:
-# 1. Validate token endpoint URL
-assert _protector.validate_url("https://oauth2.googleapis.com/token")
-
-# 2. Validate calendar API base URL
-assert _protector.validate_url("https://www.googleapis.com/calendar/v3")
-```
-
-Google's official endpoints (`*.googleapis.com`) are HTTPS-only, which
-passes the `ALLOWED_SCHEMES` check. The SSRF protector blocks any
-user-supplied calendar_id or URL that resolves to private ranges.
-
-### 5.4 Tenant Isolation
-
-All calendar operations are scoped to `user["user_id"]`:
-
-- Token lookup: `WHERE user_id = :user_id`
-- Event import: `WHERE user_id = :user_id AND google_calendar_event_id = :event_id`
-- Status check: `WHERE user_id = :user_id AND is_active = true`
-- No cross-user calendar access is possible — the OAuth tokens belong to
-  one user and the DB enforces ownership
-
-### 5.5 Google API Security
-
-- **Minimal scopes**: Only `calendar.readonly` is requested — no write access
-- **Offline access**: `access_type="offline"` + `prompt="consent"` ensures
-  we get a refresh_token on first auth
-- **Token refresh**: Handled server-side, never exposed to the frontend
-- **HTTPS only**: All Google API calls use HTTPS (enforced by google-api-python-client)
-
-### 5.6 State Management
-
-OAuth states are stored in a lightweight table to support concurrent users:
-
-```python
-class OAuthState(Base, TimestampMixin):
-    __tablename__ = "oauth_states"
-
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
-    )
-    state_token: Mapped[str] = mapped_column(
-        String(100), unique=True, nullable=False, index=True
-    )
-    user_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("users.id"), nullable=False
-    )
-    expires_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
-    used: Mapped[bool] = mapped_column(Boolean, default=False)
-```
-
-States expire after 10 minutes and are cleaned up by a periodic sweep
-(or lazily on read).
-
----
-
-## 6. Frontend Integration Points
-
-### 6.1 API Client Extensions
-
-**File**: `frontend/src/api/googleCalendar.ts` (new file)
-
-```typescript
-/** Google Calendar integration API client. */
-import { workspaceRequest } from './workspace';
-
-export interface CalendarEvent {
-  id: string;
-  summary: string;
-  description: string;
-  start: string;
-  end: string;
-  attendees: Array<{ email: string; display_name: string; response_status: string }>;
-  location: string;
-  meet_link: string | null;
-  organizer: { email: string; display_name: string };
-  calendar_id: string;
-  html_link: string;
-  imported: boolean;
-}
-
-export interface CalendarStatus {
-  connected: boolean;
-  calendar_id: string;
-  connected_at: string | null;
-  token_expires_at: string | null;
-  needs_reauth: boolean;
-}
-
-export interface ImportResult {
-  meeting: {
-    id: string;
-    title: string;
-    source: string;
-    google_calendar_event_id: string;
-    date: string;
-    duration: string;
-    participants: number;
-    review_status: string;
-    calendar_context: {
-      attendees: string[];
-      location: string;
-      meet_link: string | null;
-      description: string;
-    };
-  };
-}
-
-const CALENDAR_BASE = '/api/v1/integrations/google-calendar';
-
-/** Get authorization URL to start OAuth flow. */
-export async function getAuthUrl(): Promise<{ authorization_url: string; state: string }> {
-  const response = await fetch(`${CALENDAR_BASE}/auth`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${sessionStorage.getItem('workspace_token') ?? ''}`,
+```json
+{
+  "items": {
+    "Jira": {
+      "connected": true,
+      "provider": "jira",
+      "mode": "adapter_required",
+      "account_email": "maya@acme.com",
+      "account_url": "https://acme.atlassian.net",
+      "token_expires_at": "2026-08-07T10:00:00+00:00"
     },
-  });
-  if (!response.ok) throw new Error('Failed to start Google Calendar authorization');
-  return response.json();
-}
-
-/** Get connection status. */
-export async function getCalendarStatus(): Promise<CalendarStatus> {
-  return workspaceRequest<CalendarStatus>('/integrations/google-calendar/status');
-}
-
-/** List upcoming events. */
-export async function listEvents(days = 7): Promise<{ events: CalendarEvent[]; calendar_id: string }> {
-  return workspaceRequest(`/integrations/google-calendar/events?days=${days}`);
-}
-
-/** Import a calendar event as a meeting. */
-export async function importEvent(eventId: string, calendarId = 'primary'): Promise<ImportResult> {
-  return workspaceRequest(`/integrations/google-calendar/import/${eventId}?calendar_id=${calendarId}`, {
-    method: 'POST',
-  });
-}
-
-/** Disconnect Google Calendar. */
-export async function disconnectCalendar(): Promise<void> {
-  await workspaceRequest('/integrations/google-calendar/disconnect', { method: 'DELETE' });
-}
-```
-
-### 6.2 MeetingSetup.tsx Changes
-
-The existing `CAPTURE` array already includes `'Import calendar meeting'`.
-The current implementation disables it. Changes:
-
-1. **Enable the calendar import capture option** — When selected, show a
-   calendar event picker instead of the file upload form.
-
-2. **Add calendar event picker component**:
-
-```typescript
-// In MeetingSetup.tsx, replace the disabled state with:
-
-if (capture === 'Import calendar meeting') {
-  return <CalendarEventPicker onComplete={onComplete} />;
-}
-```
-
-3. **New component**: `CalendarEventPicker.tsx` (in `frontend/src/workspace/`)
-
-```typescript
-/** Calendar event selection and import flow. */
-export function CalendarEventPicker({ onComplete }: { onComplete: (result: MeetingResult) => void }) {
-  const [events, setEvents] = useState<CalendarEvent[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [importing, setImporting] = useState<string | null>(null);
-  const [connected, setConnected] = useState<boolean | null>(null);
-
-  useEffect(() => {
-    getCalendarStatus()
-      .then(status => {
-        setConnected(status.connected);
-        if (status.connected) return listEvents(7);
-        return null;
-      })
-      .then(data => {
-        if (data) setEvents(data.events);
-        setLoading(false);
-      })
-      .catch(err => {
-        setError(err.message);
-        setLoading(false);
-      });
-  }, []);
-
-  const handleConnect = async () => {
-    const { authorization_url } = await getAuthUrl();
-    window.location.href = authorization_url;
-  };
-
-  const handleImport = async (eventId: string) => {
-    setImporting(eventId);
-    try {
-      const result = await importEvent(eventId);
-      onComplete(result.meeting as MeetingResult);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Import failed');
-      setImporting(null);
-    }
-  };
-
-  if (connected === false) {
-    return (
-      <section className="calendar-connect">
-        <div className="page-heading centered">
-          <span className="eyebrow">Calendar integration</span>
-          <h2>Connect your Google Calendar</h2>
-          <p>Browse upcoming meetings and import them with one click.</p>
-        </div>
-        <button className="primary large" onClick={handleConnect}>
-          Connect Google Calendar →
-        </button>
-      </section>
-    );
+    "Linear":   { "connected": false, "provider": "linear", "mode": "adapter_required" },
+    "Asana":    { "connected": false, "provider": "asana",  "mode": "adapter_required" },
+    "Todoist":  { "connected": false, "provider": "todoist","mode": "adapter_required" },
+    "Microsoft Planner": { "connected": false, "mode": "adapter_required" },
+    "Salesforce":        { "connected": false, "mode": "adapter_required" },
+    "Slack":             { "connected": false, "mode": "adapter_required" }
   }
-
-  return (
-    <section className="calendar-events">
-      <div className="page-heading">
-        <span className="eyebrow">Calendar import</span>
-        <h2>Upcoming meetings (7 days)</h2>
-      </div>
-      {loading && <SkeletonGrid />}
-      {error && <div className="error-banner">{error}</div>}
-      <div className="event-list">
-        {events.map(event => (
-          <article key={event.id} className="event-card">
-            <div className="event-time">
-              <strong>{new Date(event.start).toLocaleDateString()}</strong>
-              <small>{new Date(event.start).toLocaleTimeString()} — {new Date(event.end).toLocaleTimeString()}</small>
-            </div>
-            <div className="event-details">
-              <h3>{event.summary}</h3>
-              <p>{event.description || 'No description'}</p>
-              <small>{event.attendees.length} attendees · {event.location || 'No location'}</small>
-            </div>
-            <button
-              className={event.imported ? 'secondary' : 'primary'}
-              disabled={event.imported || importing === event.id}
-              onClick={() => handleImport(event.id)}
-            >
-              {event.imported ? '✓ Imported' : importing === event.id ? 'Importing…' : 'Import →'}
-            </button>
-          </article>
-        ))}
-        {events.length === 0 && !loading && (
-          <div className="empty-state">
-            <h3>No upcoming meetings</h3>
-            <p>Your calendar is clear for the next 7 days.</p>
-          </div>
-        )}
-      </div>
-    </section>
-  );
 }
 ```
 
-### 6.3 UploadFlow.tsx Changes
+- `connected` mirrors the **DB row** (`is_active`), not just the doc flag —
+  re-read the token table so a revoked/replaced credential is reflected.
+- `token_expires_at` null for non-expiring tokens (linear/asana/todoist,
+  jira-basic); present for jira-oauth2.
+- Legacy connectors (Planner/Salesforce/Slack) keep `{connected, mode}` only.
 
-The upload flow tab bar already has `'◇ Import calendar'` as the third tab.
-When this tab is selected, render the `CalendarEventPicker` component
-instead of the upload form:
+### 6.2 `POST /api/v1/workspace/integrations/{name}/connect` (extended)
 
-```typescript
-// In UploadFlow.tsx, add a third tab handler:
-const [activeTab, setActiveTab] = useState<'upload' | 'record' | 'calendar'>('upload');
+Backward-compatible: `{"enabled": true|false}` still works **for legacy
+connectors** (Planner/Salesforce/Slack) exactly as today.
 
-// In the tab bar:
-<button onClick={() => setActiveTab('calendar')}>◇ Import calendar</button>
+For the four PM providers, body:
 
-// Conditional render:
-{activeTab === 'calendar' && <CalendarEventPicker onComplete={onComplete} />}
+```json
+{ "credentials": { "token": "<api key / PAT / REST token / jira api_token>",
+                   "site_url": "https://acme.atlassian.net",      // jira-basic only
+                   "email": "maya@acme.com",                      // jira-basic only
+                   "default_project": "PROJ" } }                  // optional
 ```
 
-### 6.4 Dashboard.tsx Changes
+Behavior:
 
-1. **Add calendar status widget** — Show a "Connected" badge or
-   "Connect Calendar" CTA in the onboarding section.
+1. Resolve adapter; unknown provider → `404 {"detail": "Integration not found"}`.
+2. `auth = AdapterAuth(provider, token, site_url, email, default_project)`.
+3. `await adapter.connect(auth)`:
+   - success → upsert `pm_integration_tokens` (encrypted blob =
+     `TokenEncryptor().encrypt(json.dumps({token, site_url, email}))`), update
+     doc entry (`connected=true`, account fields), audit
+     `integration.changed`, return `201`:
+     ```json
+     { "name": "Jira", "provider": "jira", "connected": true,
+       "account_email": "...", "account_url": "...",
+       "token_expires_at": null }
+     ```
+   - `AdapterAuthError` → `401 {"detail": "Invalid or expired credentials for Jira. Reconnect your account."}`
+   - `AdapterUnavailableError` → `502 {"detail": "Jira is temporarily unavailable. Try again in a few minutes."}`
+   - `AdapterValidationError` → `422 {"detail": "..."}`
+4. `{"enabled": false}` on a PM provider → disconnect (§6.4).
+5. `{"enabled": true}` on a PM provider **without** credentials →
+   `422 {"detail": "Credentials required to connect Jira"}` (never flips the flag).
 
-2. **Enhance metric grid** — Add a "Calendar events" metric when connected:
+### 6.3 OAuth2 (Jira) endpoints — `routes/integrations.py`
 
-```typescript
-// In the metric grid, conditionally show:
-{calendarStatus?.connected && (
-  <article>
-    <span className="metric-icon amber">◇</span>
-    <div>
-      <small>Calendar events</small>
-      <strong>{calendarEventCount}</strong>
-      <em>Next 7 days</em>
-    </div>
-  </article>
-)}
+`POST /api/v1/integrations/jira/auth` → `200`:
+
+```json
+{ "authorization_url": "https://auth.atlassian.com/authorize?...",
+  "state": "<opaque csrf>" }
 ```
 
-3. **Update onboarding checklist** — The existing "Connect your calendar"
-   step is already marked as done. When the user connects, update the
-   workspace state to reflect this.
+State persisted in `OAuthState` (add `provider` column, default `"google_calendar"`
+for existing rows) with 10-minute TTL, consumed on callback, purged on read —
+exactly the `google_calendar.py` helpers.
 
-### 6.5 IntegrationsCenter.tsx Changes
+`GET /api/v1/integrations/jira/callback?code=...&state=...` → `200`:
 
-Add Google Calendar as a first-class integration with connection status:
-
-```typescript
-// Replace the generic integration card with a rich one for Google Calendar:
-{items['Google Calendar'] && (
-  <article className="integration-card featured">
-    <span className="integration-logo">G</span>
-    <div>
-      <h3>Google Calendar</h3>
-      <p>{items['Google Calendar'].connected ? 'Connected · Syncing events' : 'Browse and import meetings'}</p>
-    </div>
-    <button
-      className={items['Google Calendar'].connected ? 'secondary' : 'primary'}
-      onClick={() => items['Google Calendar'].connected ? handleDisconnect() : handleConnect()}
-    >
-      {items['Google Calendar'].connected ? 'Disconnect' : 'Connect'}
-    </button>
-  </article>
-)}
+```json
+{ "connected": true, "provider": "jira",
+  "account_email": "maya@acme.com",
+  "account_url": "https://acme.atlassian.net",
+  "token_expires_at": "2026-08-07T10:00:00+00:00" }
 ```
+
+Errors: bad/expired state → `400`; code exchange failure → `400`
+("Failed to exchange authorization code"); refresh failure later →
+`401` ("Jira token expired. Please re-authorize.").
+
+### 6.4 `POST /api/v1/workspace/integrations/{name}/disconnect`
+
+```json
+{ "name": "Jira", "provider": "jira", "connected": false }
+```
+
+Soft-deletes the DB row (`is_active=False`), clears the doc entry back to
+`connected:false` + account fields removed, audits `integration.changed`.
+Idempotent: disconnecting an unconnected provider returns the same `200`.
+Legacy connectors accept this endpoint too (maps to `enabled:false`).
+
+### 6.5 `POST /api/v1/workspace/actions/{action_id}/queue` (rewritten)
+
+Request — unchanged: `{"destination": "Jira"}` (display name) — the UI sends
+the display name; the route maps it via the doc catalog to `provider: "jira"`.
+`{"destination": "jira"}` (slug) is also accepted (normalize case-insensitively,
+strip spaces: `"Microsoft Planner"` → legacy).
+
+Response — `200` (task created):
+
+```json
+{
+  "id": "a1b2...", "title": "Ship the Q3 report", "owner": "Maya",
+  "due": "2026-08-12", "meeting_id": "m-123", "meeting": "Q3 planning",
+  "timestamp": "00:00", "status": "queued", "destination": "Jira",
+  "external_id": "ACME-123", "external_url": "https://acme.atlassian.net/browse/ACME-123",
+  "sync_state": "task-synced"
+}
+```
+
+Behavior (exact order):
+
+1. Load action; missing → `404`.
+2. Resolve destination → provider. Unknown destination →
+   `422 {"detail": "Unknown destination 'X'"}`.
+3. **Legacy connector** (Planner/Salesforce/Slack): preserve today's behavior
+   exactly — if `connected` false → `409`; else set
+   `{destination, status:"queued", external_id:null, adapter_job_id:uuid4()}`
+   and return (keeps `test_workspace_api_v102.py::test_actions_require_connected_adapter_and_are_not_fake_synced` green).
+4. **PM provider**: load `pm_integration_tokens` row for
+   `(user_id, provider)` with `is_active=True`.
+   - No row → `409 {"detail": "Connect Jira before syncing this action"}`.
+     **This is the ONLY 409 left for PM providers.**
+   - Decrypt credentials; build `AdapterAuth` (+ `default_project` from the
+     stored blob or the request's optional `project` field — see below).
+5. **Idempotency pre-check** (see §7): if `action.external_id` is already set
+   AND `action["external_id"]` matches the stored `sync_key`, return the action
+   with `200` **without** calling the provider (and without 409).
+6. Build `idempotency_key = f"{action['meeting_id']}:{action['id']}"`.
+7. `await adapter.create_task(action, project=..., idempotency_key=...)` inside
+   `asyncio.timeout(30)`.
+   - Timeout/`AdapterUnavailableError` → `502` friendly message, `status` stays
+     unchanged, nothing persisted — the user can retry (§8).
+   - `AdapterAuthError` → `401` + mark the integration doc entry
+     `auth_error: true` (frontend offers "Reconnect").
+   - `AdapterValidationError` → `422`.
+8. Success → persist `action.update(external_id=..., external_url=...,
+   destination=..., status="queued")`, store
+   `sync_key = f"{meeting_id}:{action_id}"` on the action, audit
+   `action.synced {destination, external_id}`, write doc, return `200` with
+   the full action (including `sync_state: "task-synced"`).
+
+Optional request extension (not required by the pre-tester, keep optional):
+`{"destination": "Jira", "project": "ACME"}` overrides the stored default
+project for this one call.
+
+Error table:
+
+| Case | Status | detail |
+|---|---|---|
+| action not found | 404 | "Action not found" |
+| unknown destination | 422 | "Unknown destination 'X'" |
+| legacy connector, unconnected | 409 | "Connect an adapter before queuing this action" |
+| PM provider, no credential row | 409 | "Connect Jira before syncing this action" |
+| credentials expired/revoked | 401 | "Jira token expired. Please re-authorize." |
+| provider 5xx / timeout / network | 502 | "{Provider} is temporarily unavailable. Try again in a few minutes." |
+| provider 400/422 (bad project etc.) | 422 | sanitized, friendly message |
+| duplicate idempotent re-sync | 200 | returns existing action untouched |
+
+### 6.6 `GET /api/v1/workspace/actions` (unchanged path, extended item)
+
+Action items now include `external_url` and `sync_state`; the route reads the
+doc as today, so no code change beyond the seed in §5.2. UI consumes
+`external_url` to render the link and `sync_state` for the pill.
 
 ---
 
-## 7. Implementation Roadmap
+## 7. Idempotency
 
-### Phase 1: Backend Foundation (estimated: 2-3 days)
-
-| # | Task | Dependencies | Profile |
-|---|------|-------------|---------|
-| 1.1 | Add `google-api-python-client`, `google-auth-oauthlib`, `google-auth-httplib2` to `pyproject.toml` | None | developer |
-| 1.2 | Create `TokenEncryptor` in `services/token_encryption.py` | None | developer |
-| 1.3 | Add `GoogleCalendarToken` and `OAuthState` models to `db/models.py` | None | developer |
-| 1.4 | Create Alembic migration for new tables + Meeting columns | 1.3 | developer |
-| 1.5 | Write unit tests for `TokenEncryptor` (encrypt/decrypt round-trip, invalid input) | 1.2 | developer |
-
-### Phase 2: Service Layer (estimated: 2-3 days)
-
-| # | Task | Dependencies | Profile |
-|---|------|-------------|---------|
-| 2.1 | Create `GoogleCalendarService` in `services/google_calendar.py` | 1.1, 1.2 | developer |
-| 2.2 | Add Google OAuth env vars to `config.py` (`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`) | None | developer |
-| 2.3 | Write unit tests for OAuth flow (mock google transport) | 2.1 | developer |
-| 2.4 | Write unit tests for calendar event listing (mock API responses) | 2.1 | developer |
-
-### Phase 3: API Routes (estimated: 2-3 days)
-
-| # | Task | Dependencies | Profile |
-|---|------|-------------|---------|
-| 3.1 | Create `routes/google_calendar.py` with auth, callback, events, import endpoints | 2.1 | developer |
-| 3.2 | Add SSRF validation on Google API URLs | 3.1 | developer |
-| 3.3 | Register router in `main.py` | 3.1 | developer |
-| 3.4 | Write integration tests for all 6 endpoints | 3.1, 3.3 | developer |
-| 3.5 | Update workspace integration list to include Google Calendar | 3.1 | developer |
-
-### Phase 4: Frontend (estimated: 2-3 days)
-
-| # | Task | Dependencies | Profile |
-|---|------|-------------|---------|
-| 4.1 | Create `api/googleCalendar.ts` API client | 3.1 | developer |
-| 4.2 | Create `CalendarEventPicker.tsx` component | 4.1 | developer |
-| 4.3 | Update `MeetingSetup.tsx` to enable calendar import option | 4.2 | developer |
-| 4.4 | Update `UploadFlow.tsx` with calendar tab | 4.2 | developer |
-| 4.5 | Update `Dashboard.tsx` with calendar status widget | 4.1 | developer |
-| 4.6 | Update `IntegrationsCenter.tsx` with Google Calendar card | 4.1 | developer |
-| 4.7 | Add CSS styles for calendar components | 4.2-4.6 | developer |
-
-### Phase 5: Polish & QA (estimated: 1-2 days)
-
-| # | Task | Dependencies | Profile |
-|---|------|-------------|---------|
-| 5.1 | E2E test: OAuth flow (start → callback → events → import) | All | pre-tester |
-| 5.2 | Security review: token encryption, CSRF, tenant isolation | All | pre-tester |
-| 5.3 | Error handling audit: expired tokens, revoked access, network failures | All | pre-tester |
-| 5.4 | Documentation: update README with Google Calendar setup instructions | All | developer |
-| 5.5 | Lint pass and type checking (`mypy`, `ruff`) | All | pre-tester |
-
-### Dependencies graph
-
-```
-1.1 → 2.1 → 3.1 → 3.3 → 4.1 → 4.2 → 4.3, 4.4
-                              ↓
-                            4.5, 4.6
-1.2 → 1.5 (tests only)
-1.3 → 1.4
-2.2 (independent)
-2.1 → 2.3, 2.4 (tests only)
-3.1 → 3.2, 3.4, 3.5
-```
-
-### Environment variables to add
-
-```bash
-# Google Calendar OAuth2 (required for integration)
-GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
-GOOGLE_CLIENT_SECRET=your-client-secret
-GOOGLE_REDIRECT_URI=https://your-domain.com/api/v1/integrations/google-calendar/callback
-```
+- **Key**: `f"{action['meeting_id']}:{action['id']}"` — meeting id + action id.
+- **Transport**: sent as the provider's idempotency header (§4) on every
+  create call, so even a retry after a lost response cannot create a duplicate
+  provider task.
+- **App-level guard**: the action stores `sync_key` when a task is created.
+  Before calling the provider, `queue_action` checks: if
+  `action.get("sync_key") == idempotency_key and action.get("external_id")`,
+  return the existing action with `200` — no provider call, no 409.
+- This makes the endpoint naturally idempotent for the same meeting+action and
+  **safe for the UI retry button** (double-click, network retry, re-sync).
+- Different meeting or different action ⇒ different key ⇒ independent tasks.
 
 ---
 
-## Appendix: File Manifest
+## 8. Error & Retry Behavior
 
-### New files to create
+1. **Friendly messages**: every provider error is mapped to a sanitized
+   `detail` (never raw upstream body — may echo user content / PHI). Map:
+   - 401/403 → 401 re-authorize (auth_error flag set for UI)
+   - 5xx / timeout / connection error → 502 "temporarily unavailable"
+   - 400/422 → 422 with a human hint ("Check the project key in your Jira
+     settings")
+2. **Retry semantics**:
+   - Client retries the same `POST /actions/{id}/queue` freely — idempotency
+     (§7) guarantees no duplicates.
+   - Backend retries transient provider failures **once** with a 1.5s
+     exponential backoff inside the adapter for 5xx/timeouts; still failing →
+     `AdapterUnavailableError` → 502.
+   - Never auto-retry 401/403 (re-auth required) or 400/422 (user error).
+3. **UI**: on 502/422 the button stays enabled with the friendly message and a
+   "Try again" action; on 401 the UI offers "Reconnect {provider}".
+4. **Audit**: every provider call outcome is audited
+   (`action.synced`, `action.sync_failed {reason}`) so failures are visible in
+   the compliance/audit trail.
 
-| Path | Purpose |
-|------|---------|
-| `src/meeting_notes_ai/services/token_encryption.py` | AES-256-GCM token encrypt/decrypt |
-| `src/meeting_notes_ai/services/google_calendar.py` | OAuth2 + Calendar API service |
-| `src/meeting_notes_ai/routes/google_calendar.py` | 6 API endpoints |
-| `alembic/versions/0xx_add_google_calendar.py` | DB migration |
-| `frontend/src/api/googleCalendar.ts` | Frontend API client |
-| `frontend/src/workspace/CalendarEventPicker.tsx` | Event picker component |
+---
 
-### Files to modify
+## 9. Frontend Contract
 
-| Path | Change |
-|------|--------|
-| `pyproject.toml` | Add google-api-python-client deps |
-| `src/meeting_notes_ai/config.py` | Add GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI |
-| `src/meeting_notes_ai/db/models.py` | Add GoogleCalendarToken, OAuthState; extend Meeting |
-| `src/meeting_notes_ai/main.py` | Register google_calendar router |
-| `src/meeting_notes_ai/routes/workspace.py` | Add Google Calendar to integrations list |
-| `frontend/src/workspace/MeetingSetup.tsx` | Enable calendar import capture option |
-| `frontend/src/workspace/UploadFlow.tsx` | Add calendar tab |
-| `frontend/src/workspace/Dashboard.tsx` | Add calendar status widget |
-| `frontend/src/workspace/IntegrationsCenter.tsx` | Add Google Calendar card |
+### 9.1 `ActionCenter.tsx` — "Queue for adapter" → "Sync to {provider}"
+
+Current dead button (line 6, one-liner component):
+`i.status==='suggested' ? Confirm : i.status==='queued' ? <span>{external_id}</span> : Queue for adapter`
+
+New rendering per action card (keep the component's compact style):
+
+- `status === 'queued' && external_url` →
+  `<a href={external_url} target="_blank" rel="noreferrer">View in {provider}</a>`
+  and the status pill renders `task-synced` (via `sync_state`).
+- `status === 'queued' && !external_url` (legacy path) → keep the current
+  `<span>{external_id}</span>` fallback.
+- `status === 'confirmed'` →
+  `<button className="primary" onClick={() => sync(i)}>Sync to {i.destination}</button>`
+  (label derived from the action's `destination` display name; default
+  "Sync to provider" if unset).
+- `status === 'suggested'` → unchanged Confirm button.
+
+`sync(i)` becomes:
+
+```ts
+const sync = async (i: WorkAction) => {
+  setSyncingId(i.id); setError('');
+  try {
+    const updated = await workspaceRequest<WorkAction>(`/actions/${i.id}/queue`, {
+      method: 'POST',
+      body: JSON.stringify({ destination: i.destination }),
+    });
+    setItems(prev => prev.map(a => a.id === i.id ? updated : a));  // external_url + task-synced
+  } catch (e) {
+    setError(friendlyMessage(e));   // e.message is already the sanitized backend detail
+  } finally { setSyncingId(null); }
+};
+```
+
+- `friendlyMessage` shows `e.message` (backend sanitized) plus a **"Try again"**
+  button that re-invokes `sync(i)`; for 401 messages it shows "Reconnect {provider}".
+- `WorkAction` interface grows: `external_url?: string|null; sync_state?: string;`
+  (keep `external_id`).
+- Disable the button while `syncingId === i.id` (label "Syncing…").
+- On 401 the user is routed to the IntegrationsCenter via existing nav.
+
+### 9.2 `IntegrationsCenter.tsx` — real connect UX
+
+- Catalog from `GET /integrations` now carries `provider`, `account_email`,
+  `account_url`, `token_expires_at` for the four PM providers.
+- PM cards render a **Connect form** (inline, per card):
+  - linear → one input "Linear API key"
+  - asana → one input "Asana personal access token"
+  - todoist → one input "Todoist REST API token"
+  - jira → button "Connect with Atlassian" (OAuth2 popup/redirect) **and** an
+    optional "Use API token instead" form (token + site URL + email)
+  - all → optional "Default project/team" input (jira key / linear teamId /
+    asana workspace or project gid / todoist project id)
+  - Submit → `POST /integrations/{provider}/connect` with
+    `{credentials: {...}}`; on success re-load catalog; on 401/422 show the
+    friendly detail inline.
+- Connected PM cards show `account_email`, `account_url` (linked), and
+  `token_expires_at` ("expires …" / "never") plus a Disconnect button
+  (`POST /integrations/{provider}/disconnect`).
+- Legacy cards keep the current toggle (unchanged).
+
+### 9.3 `workspace.ts` client
+
+No change required — `workspaceRequest` already surfaces `detail` from error
+responses, which is exactly the friendly-message channel.
+
+### 9.4 Status pill mapping
+
+`sync_state` values: `pending` (default/absent), `task-synced` (queued +
+external_id set). CSS class `task-synced` must be styled (reuse `task-queued`
+styles + accent color). No new backend status values.
+
+---
+
+## 10. Backward Compatibility
+
+| Constraint | Mechanism |
+|---|---|
+| `test_workspace_api_v102.py:80` legacy queue 409 + fake sync | §6.5 step 3: legacy connectors keep old behavior verbatim (doc-flag `connected`, `adapter_job_id`) |
+| `test_workspace_api_v102.py:124` `GET /integrations` 200 + Unknown connect 404 | path and error unchanged; unknown name still 404 |
+| Existing `POST /integrations/{name}/connect {"enabled": bool}` | still works for legacy; PM providers with `enabled:true` and no credentials → 422 (never silently fake-connect) |
+| Workspace JSON schema | v2 → v3 read-time backfill; no data loss |
+| `ActionUpdate` / action PATCH | unchanged; new fields additive |
+| Google Calendar integration | untouched; spec preserved at `analysis/architecture-gcal-v1.md` |
+| Frontend build | additive props only; `tsc -b` must stay green |
+
+---
+
+## 11. Configuration & Environment
+
+`src/meeting_notes_ai/config.py` additions (all optional at runtime; required
+only when the corresponding flow is used):
+
+```python
+jira_client_id: str = ""            # OAuth2 consumer / marketplace app
+jira_client_secret: str = ""
+jira_redirect_uri: str = ""         # e.g. https://app.example.com/api/v1/integrations/jira/callback
+# JWT-basic fallback:
+jira_site_url: str = ""             # optional; overrides per-request site_url
+```
+
+Env vars: `JIRA_CLIENT_ID`, `JIRA_CLIENT_SECRET`, `JIRA_REDIRECT_URI`,
+`JIRA_SITE_URL`. **No** env vars for linear/asana/todoist — credentials are
+user-supplied at connect time and stored encrypted. `TOKEN_ENCRYPTION_KEY`
+(or `HIPAA_MASTER_KEY`) already required by `TokenEncryptor`.
+
+Docs (documenter task): `docs/integrations.md` + per-provider setup in
+`docs/integrations/` (app creation, scopes, where to find the key, env vars,
+troubleshooting), README section, CHANGELOG entry.
+
+---
+
+## 12. Testing Strategy
+
+- **Pre-tester** (`tests/test_pm_adapters.py`, RED before implementation):
+  - Interface tests: `JiraAdapter`, `LinearAdapter`, `AsanaAdapter`,
+    `TodoistAdapter` exist; `connect`/`create_task` signatures match §3;
+    registry maps all four; queue route wired (importable router).
+  - Behavioral tests with **transport-level HTTP mocks** (real `httpx` calls
+    intercepted — e.g. `respx` or `httpx.MockTransport`; the repo pins `httpx`
+    already; if `respx` is needed it must be added to `dev` deps in
+    `pyproject.toml`):
+    - each provider `create_task` issues the correct request (URL, method,
+      headers incl. auth + idempotency key, body) against a mock transport
+      and parses `external_id`/`external_url` from the fixture response.
+    - `POST /actions/{id}/queue` performs the provider call, persists
+      `external_id` + `external_url`, returns `task-synced`.
+    - 409 **only** when unconnected; 502 on provider 5xx; 401 on 401.
+    - idempotency: second queue with same meeting+action returns 200 without
+      a second provider call (mock counts calls).
+    - `GET /integrations` reflects real connection state.
+  - Stub adapters raising `NotImplementedError` make interface tests pass and
+    behavioral tests fail clearly.
+- **Backend developer**: run `tests/test_pm_adapters.py` + full suite +
+  `ruff`. All HTTP via `get_http_client()` seam so transport mocking is
+  one-line.
+- **Tester**: full suite; UI E2E smoke + browser-helper visual check on the
+  Action Center and Integrations Center.
+- Transport mocks only — no `MagicMock`-only adapter tests, no network calls
+  in CI.
+
+---
+
+## 13. Implementation Order
+
+1. **pre-tester**: `tests/test_pm_adapters.py` (RED) — do not modify existing
+   tests.
+2. **backend developer**:
+   a. `services/http_client.py` + `services/integrations/base.py` (ABC, auth,
+      results, exceptions)
+   b. `registry.py`, then `jira.py`, `linear.py`, `asana.py`, `todoist.py`
+   c. `db/models.py` `PMIntegrationToken` + `OAuthState.provider`
+   d. `routes/integrations.py` (jira auth/callback)
+   e. `routes/workspace.py` — seed v3, `GET /integrations`,
+      `connect/disconnect`, `queue_action` rewrite
+   f. `config.py` settings; run full suite + ruff; commit & push
+3. **frontend developer**: `ActionCenter.tsx`, `IntegrationsCenter.tsx`,
+   `task-synced` CSS; `tsc -b` green.
+4. **tester**: gates + E2E; **tech-lead** review; **release-manager** version
+   bump + CHANGELOG; **documenter** docs.
+
+---
+
+## 14. ADR Summary
+
+| # | Decision | Rationale |
+|---|---|---|
+| ADR-1 | `httpx` (already pinned) as the only HTTP client; shared client factory | no new runtime dep; one transport seam for mocking |
+| ADR-2 | Credentials encrypted with existing `TokenEncryptor`, stored per-user in `pm_integration_tokens` | reuse proven AES-256-GCM DEK/KEK pattern; per-user isolation |
+| ADR-3 | DB row is source of truth for credentials; workspace doc mirrors metadata | `GET /integrations` keeps its existing JSON shape without leaking secrets |
+| ADR-4 | Idempotency key = `meeting_id:action_id`, sent as provider idempotency header + app-level `sync_key` guard | provider-level dedupe + cheap app-level short-circuit; safe retries |
+| ADR-5 | 409 reserved for unconnected only; 401/502/422 for provider outcomes | precise semantics; UI can branch on status |
+| ADR-6 | Legacy connectors keep the old facade verbatim | existing tests and product surface (Planner/Salesforce/Slack) remain valid |
+| ADR-7 | OAuth2 only where it adds value (Jira); API keys/PAT/token for the rest | matches each provider's least-friction supported flow; no forced OAuth complexity |
+| ADR-8 | Action status remains `queued`; `sync_state` derived (`task-synced`) | no migration of status values; existing filters keep working |
+
+---
+
+## 15. Open Questions
+
+1. **Jira OAuth2 app type**: site-level OAuth consumer vs marketplace-style
+   cloud OAuth2 — both use the same endpoints; pick at implementation based on
+   what the deployment admin can create. The connect contract (§6.2) is
+   identical either way. JWT-basic fallback covers Server/DC.
+2. **`respx` vs `httpx.MockTransport`** for transport mocks: pre-tester
+   chooses; both satisfy "transport-level, no MagicMock-only". If `respx`,
+   add to `dev` deps.
+3. **Default project resolution**: adapters fall back to provider default
+   when `project` is None; whether connect() should require an explicit
+   project selection in the UI is a UX call for the frontend task (optional
+   field, never blocking connect).
+
+---
+
+*End of spec. Downstream tasks (pre-tester `t_b08f029f`, backend `t_fabaed18`,
+frontend `t_adf4ff4a`) implement directly from this document; the acceptance
+criteria of root task `t_b80833c2` map 1:1 to §3–§9.*
