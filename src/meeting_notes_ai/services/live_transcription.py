@@ -24,13 +24,16 @@ layer maps to HTTP 429 (or a WS error frame).
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import json
 import struct
 from datetime import datetime, timezone
+from typing import Any
 from uuid import uuid4
 
+from meeting_notes_ai.config import settings
 from meeting_notes_ai.db.models import LiveSessionRecord, Meeting
 from meeting_notes_ai.db.session import get_db_session
 from meeting_notes_ai.live_session import (
@@ -41,12 +44,25 @@ from meeting_notes_ai.live_session import (
     LiveSessionStatus,
     LiveTranscriptResponse,
 )
-from meeting_notes_ai.models import ExtractionResult, MeetingMode
+from meeting_notes_ai.models import (
+    ExtractionResult,
+    MeetingMode,
+    TranscriptionResult,
+    TranscriptSegment,
+)
 from meeting_notes_ai.ratelimit import TokenBucketRateLimiter
+from meeting_notes_ai.services.diarization import SpeakerDiarizer, apply_diarization
 from meeting_notes_ai.services.extraction import ExtractionService
 from meeting_notes_ai.services.transcription import TranscriptionService
+from meeting_notes_ai.services.workflow import resolve_processing_policy
 
 _WEBM_MAGIC = b"\x1a\x45\xdf\xa3"
+
+
+def _format_timestamp(seconds: float) -> str:
+    """Format seconds as ``MM:SS`` for workspace evidence items."""
+    total = max(0, int(seconds))
+    return f"{total // 60:02d}:{total % 60:02d}"
 
 
 def _chunk_to_json(chunk: LiveChunk) -> dict:
@@ -119,15 +135,21 @@ class LiveTranscriptionService:
 
     def __init__(
         self,
-        transcription_service: TranscriptionService | None = None,
+        transcription_service: Any | None = None,
         extraction_service: ExtractionService | None = None,
         rate_limiter: TokenBucketRateLimiter | None = None,
         max_chunk_bytes: int = 64 * 1024,
+        diarizer: SpeakerDiarizer | None = None,
     ) -> None:
         self.transcription_service = transcription_service or TranscriptionService(api_key="")
         self.extraction_service = extraction_service or ExtractionService(provider="openai")
         self.rate_limiter = rate_limiter or TokenBucketRateLimiter()
         self.max_chunk_bytes = max_chunk_bytes
+        # Speaker diarization is best-effort and gated on DIARIZATION=1; the
+        # default (off) path never touches pyannote, keeping P0 output identical.
+        self.diarizer = diarizer if diarizer is not None else (
+            SpeakerDiarizer() if settings.diarization_enabled else None
+        )
         # Canonical in-memory working set. Every mutation is mirrored to the
         # ``live_sessions`` table (durable storage), so a session object keeps
         # its identity within the service while surviving process restarts and
@@ -236,9 +258,11 @@ class LiveTranscriptionService:
         """Run the full pipeline and persist the meeting record.
 
         Concatenates the session's audio, transcribes via
-        ``TranscriptionService``, extracts via ``ExtractionService``, updates
-        the meeting row (transcript + summary), and marks the session
-        finalized.
+        ``TranscriptionService``, optionally runs the speaker-diarization
+        alignment (``DIARIZATION=1``), extracts via ``ExtractionService``,
+        updates the meeting row (transcript + summary + review policy), and
+        marks the session finalized. The meeting's ``mode`` (P0-4) flows from
+        the session's meeting row instead of being hard-coded to 'general'.
         """
         session = await self.get_session(session_id)
         if session is None:
@@ -250,15 +274,18 @@ class LiveTranscriptionService:
         result = await self.transcription_service.transcribe(
             audio, self._filename_for(session), language
         )
-        extraction = await self.extraction_service.extract(result.text, mode=MeetingMode.GENERAL)
+        result = await self._maybe_diarize(result, audio)
+        mode = await self._meeting_mode(session.meeting_id, session.user_id)
+        extraction = await self.extraction_service.extract(result.text, mode=mode)
         await self._persist_meeting(
             meeting_id=session.meeting_id,
             user_id=session.user_id,
             team_id=session.team_id,
             filename=self._filename_for(session),
-            mode="general",
+            mode=mode.value,
             transcript=result.text,
             extraction=extraction,
+            segments=result.segments,
             create_if_missing=False,
         )
 
@@ -297,7 +324,19 @@ class LiveTranscriptionService:
         if not self.rate_limiter.allow(self._rate_key(user_id)):
             raise LiveRateLimitExceeded("live transcription rate limit exceeded")
 
+        # An empty buffer is not a valid ambient capture: never invent content
+        # for it (the route already rejects empties; the service must not
+        # fabricate a transcript either).
+        if not audio_bytes:
+            return LiveTranscriptResponse(
+                meeting_id=meeting_id or str(uuid4()),
+                transcript="",
+                summary="",
+                duration_seconds=0.0,
+            )
+
         result = await self.transcription_service.transcribe(audio_bytes, filename, language)
+        result = await self._maybe_diarize(result, audio_bytes)
         try:
             meeting_mode = MeetingMode(mode)
         except ValueError:
@@ -313,6 +352,7 @@ class LiveTranscriptionService:
             mode=mode,
             transcript=result.text,
             extraction=extraction,
+            segments=result.segments,
             create_if_missing=True,
         )
         return LiveTranscriptResponse(
@@ -385,6 +425,7 @@ class LiveTranscriptionService:
         mode: str,
         transcript: str,
         extraction: ExtractionResult,
+        segments: list[TranscriptSegment] | None = None,
         create_if_missing: bool,
     ) -> None:
         """Write transcript + summary (+ extracted notes) to the meeting row.
@@ -392,7 +433,13 @@ class LiveTranscriptionService:
         The Meeting model has no ``summary`` column, so the summary is
         persisted inside ``metadata_json`` (the pre-tester's documented
         decision); action items / decisions / key points are stored as JSON
-        text columns, matching the existing meeting pipeline.
+        text columns, matching the existing meeting pipeline. The
+        ``resolve_processing_policy`` result (P0-4) is persisted as
+        ``review_status`` / ``phi_redaction`` inside ``metadata_json`` so
+        regulated modes surface as ``needs_review`` in the workspace. The
+        finalized meeting is also synced into the authenticated user's review
+        workspace (evidence-linked) so it appears under
+        ``GET /api/v1/workspace/meetings/{id}``.
         """
         action_items_json = json.dumps([a.model_dump() for a in extraction.action_items])
         decisions_json = json.dumps(extraction.decisions)
@@ -418,8 +465,170 @@ class LiveTranscriptionService:
             meeting.key_points = key_points_json
             metadata = json.loads(meeting.metadata_json or "{}")
             metadata["summary"] = extraction.summary
+            try:
+                policy = resolve_processing_policy(mode, None)
+                metadata["review_status"] = (
+                    "needs_review" if policy.review_required else "ready"
+                )
+                metadata["phi_redaction"] = policy.phi_redaction
+            except ValueError:
+                # Unknown mode strings (defensive) keep the P0 defaults.
+                metadata.setdefault("review_status", "ready")
+            if segments:
+                metadata["segments"] = [
+                    {
+                        "start": seg.start,
+                        "end": seg.end,
+                        "text": seg.text,
+                        "speaker": seg.speaker,
+                    }
+                    for seg in segments
+                ]
             meeting.metadata_json = json.dumps(metadata)
             await db.commit()
+        await self._sync_workspace_meeting(
+            meeting_id=meeting_id,
+            user_id=user_id,
+            mode=mode,
+            transcript=transcript,
+            extraction=extraction,
+            segments=segments or [],
+        )
+
+    # ── Diarization + mode resolution helpers ───────────────────────────────
+
+    async def _maybe_diarize(
+        self, result: TranscriptionResult, audio: bytes
+    ) -> TranscriptionResult:
+        """Apply the speaker-diarization alignment when enabled (DIARIZATION=1).
+
+        Best-effort: a missing/unavailable diarizer leaves segments untouched
+        (``speaker=None``), preserving P0 output byte-for-byte. The diarization
+        backend runs in a worker thread so the async event loop is never
+        blocked (pyannote is a CPU-bound native pipeline).
+        """
+        if self.diarizer is None or not result.segments:
+            return result
+        diarizer = self.diarizer
+        try:
+            turns = await asyncio.to_thread(
+                lambda: asyncio.run(diarizer.diarize(audio, sample_rate=16_000))
+            )
+            apply_diarization(result.segments, turns)
+        except Exception:  # pragma: no cover - best-effort by design
+            # Diarization must never break the transcription pipeline; on any
+            # backend failure segments simply keep speaker=None.
+            return result
+        return result
+
+    async def _meeting_mode(self, meeting_id: str, user_id: str) -> MeetingMode:
+        """Resolve the meeting's mode from its row, defaulting to 'general'."""
+        async for db in get_db_session():
+            meeting = await db.get(Meeting, meeting_id)
+            if meeting is not None:
+                try:
+                    return MeetingMode(meeting.mode or "general")
+                except ValueError:
+                    return MeetingMode.GENERAL
+        return MeetingMode.GENERAL
+
+    async def _sync_workspace_meeting(
+        self,
+        *,
+        meeting_id: str,
+        user_id: str,
+        mode: str,
+        transcript: str,
+        extraction: ExtractionResult,
+        segments: list[TranscriptSegment],
+    ) -> None:
+        """Sync a finalized meeting into the user's review workspace.
+
+        Creates (or updates) the canonical workspace meeting so the ambient
+        capture appears in ReviewWorkspace with evidence-linked summary,
+        decisions and action items (``GET /api/v1/workspace/meetings/{id}``).
+        Best-effort: workspace persistence failures never break the recording
+        pipeline.
+        """
+        try:
+            from meeting_notes_ai.routes.workspace import _workspace, _write_document
+
+            document, state = _workspace(user_id)
+            meeting = next((m for m in state["meetings"] if m["id"] == meeting_id), None)
+            evidence = [
+                {
+                    "timestamp": _format_timestamp(seg.start),
+                    "speaker": seg.speaker or "Speaker 1",
+                    "text": seg.text,
+                    "confidence": 0.0,
+                }
+                for seg in segments
+            ]
+            if not evidence and transcript:
+                evidence = [
+                    {
+                        "timestamp": "00:00",
+                        "speaker": "Speaker 1",
+                        "text": transcript[:500],
+                        "confidence": 0.0,
+                    }
+                ]
+            if meeting is None:
+                from meeting_notes_ai.routes.workspace import MeetingCreate
+
+                raw = MeetingCreate(
+                    id=meeting_id,
+                    title=(
+                        "In-person meeting"
+                        if mode == "general"
+                        else f"{mode.capitalize()} meeting"
+                    ),
+                    transcript=transcript or " ",
+                    summary=extraction.summary,
+                    action_items=[a.model_dump() for a in extraction.action_items],
+                    decisions=extraction.decisions,
+                    key_points=extraction.key_points,
+                    mode=mode,
+                ).model_dump(exclude={"id"})
+                state["meetings"].append(
+                    {
+                        **raw,
+                        "id": meeting_id,
+                        "owner_id": user_id,
+                        "date": datetime.now(timezone.utc).isoformat(),
+                        "duration": (
+                            f"{int(sum(s.end - s.start for s in segments))}s"
+                            if segments
+                            else "Unknown"
+                        ),
+                        "review_status": "needs_review",
+                        "participants": len(
+                            {seg.speaker for seg in segments if seg.speaker}
+                        ),
+                        "owner": "Current user",
+                        "sensitivity": (
+                            "regulated" if mode in {"healthcare", "legal"} else "internal"
+                        ),
+                        "tags": [mode],
+                        "evidence": evidence,
+                        "versions": [],
+                        "audio_url": None,
+                    }
+                )
+            else:
+                meeting["summary"] = extraction.summary
+                meeting["transcript"] = transcript
+                meeting["decisions"] = extraction.decisions
+                meeting["action_items"] = [
+                    a.model_dump() for a in extraction.action_items
+                ]
+                meeting["key_points"] = extraction.key_points
+                meeting["evidence"] = evidence
+            _write_document(document)
+        except Exception:  # pragma: no cover - best-effort sync
+            # The meeting row is already persisted; workspace sync is a
+            # convenience layer and must never fail the recording pipeline.
+            return
 
     def _assemble_audio(self, session: LiveSession) -> bytes:
         """Concatenate chunks (by sequence); frame PCM as WAV for Whisper."""

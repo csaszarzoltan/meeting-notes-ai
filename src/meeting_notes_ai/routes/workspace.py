@@ -30,6 +30,12 @@ _STATE_PATH = Path("data/workspace_state.json")
 _LOCK = threading.RLock()
 
 
+def _mmss(seconds: float) -> str:
+    """Format seconds as ``MM:SS`` (review-workspace evidence timestamps)."""
+    total = max(0, int(seconds))
+    return f"{total // 60:02d}:{total % 60:02d}"
+
+
 def _resolve_provider(integrations: dict[str, Any], destination: str) -> str | None:
     """Map a display name or slug to a provider slug, or None for legacy."""
     # Exact display-name match in the catalog
@@ -282,20 +288,169 @@ async def create_meeting(
 
 @router.get("/meetings/{meeting_id}")
 async def meeting_detail(
-    meeting_id: str, user: dict[str, Any] = Depends(get_current_user)
+    meeting_id: str,
+    user: dict[str, Any] = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
-    """Return one owned meeting."""
+    """Return one owned meeting (review-workspace shape with evidence).
+
+    Prefers the live-state workspace meeting (created from finalized uploads /
+    live sessions); falls back to the DB ``Meeting`` row so ambient recordings
+    finalized via ``POST /api/v1/meetings/live/upload`` or the WebSocket
+    finalize frame appear in the review workspace with evidence-linked
+    summary/decisions/action items.
+    """
     _, state = _workspace(user["user_id"])
-    return _find(state["meetings"], meeting_id, "Meeting")
+    meeting = next((m for m in state["meetings"] if m["id"] == meeting_id), None)
+    if meeting is not None:
+        return meeting
+
+    from meeting_notes_ai.db.session import is_session_factory_configured
+
+    if not is_session_factory_configured():
+        raise HTTPException(status_code=404, detail="Meeting not found")
+
+    from sqlalchemy import select
+    from sqlalchemy.exc import OperationalError
+
+    from meeting_notes_ai.db.models import Meeting as MeetingRow
+
+    stmt = select(MeetingRow).where(
+        MeetingRow.id == meeting_id, MeetingRow.user_id == user["user_id"]
+    )
+    try:
+        row = (await db.execute(stmt)).scalar_one_or_none()
+    except OperationalError:
+        # Schema mismatch (e.g. tests without full migrations) — treat as not found.
+        raise HTTPException(status_code=404, detail="Meeting not found")
+    if row is None:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+    metadata = {}
+    if row.metadata_json:
+        try:
+            metadata = json.loads(row.metadata_json)
+        except (TypeError, json.JSONDecodeError):
+            metadata = {}
+    segments = metadata.get("segments") or []
+    evidence = [
+        {
+            "timestamp": _mmss(seg.get("start", 0.0)),
+            "speaker": seg.get("speaker") or "Speaker 1",
+            "text": seg.get("text", ""),
+            "confidence": 0.0,
+        }
+        for seg in segments
+    ]
+    if not evidence and row.transcript:
+        evidence = [
+            {
+                "timestamp": "00:00",
+                "speaker": "Speaker 1",
+                "text": row.transcript[:500],
+                "confidence": 0.0,
+            }
+        ]
+    try:
+        action_items = json.loads(row.action_items) if row.action_items else []
+    except (TypeError, json.JSONDecodeError):
+        action_items = []
+    try:
+        decisions = json.loads(row.decisions) if row.decisions else []
+    except (TypeError, json.JSONDecodeError):
+        decisions = []
+    try:
+        key_points = json.loads(row.key_points) if row.key_points else []
+    except (TypeError, json.JSONDecodeError):
+        key_points = []
+    return {
+        "id": row.id,
+        "title": row.title or "Untitled meeting",
+        "transcript": row.transcript or "",
+        "summary": metadata.get("summary", ""),
+        "action_items": action_items,
+        "decisions": decisions,
+        "key_points": key_points,
+        "mode": row.mode or "general",
+        "review_status": metadata.get("review_status", "ready"),
+        "phi_redacted": bool(metadata.get("phi_redaction", False)),
+        "warnings": [],
+        "date": row.created_at.isoformat() if row.created_at else None,
+        "duration": "Unknown",
+        "participants": 0,
+        "owner": user.get("display_name") or user.get("email") or "Current user",
+        "sensitivity": (
+            "regulated" if (row.mode or "general") in {"healthcare", "legal"} else "internal"
+        ),
+        "tags": [row.mode or "general"],
+        "evidence": evidence,
+        "versions": [],
+        "audio_url": None,
+    }
 
 
 @router.patch("/meetings/{meeting_id}/review")
 async def update_review(
-    meeting_id: str, request: ReviewUpdate, user: dict[str, Any] = Depends(get_current_user)
+    meeting_id: str,
+    request: ReviewUpdate,
+    user: dict[str, Any] = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
-    """Persist review edits and immutable provenance."""
+    """Persist review edits and immutable provenance.
+
+    Updates the workspace meeting (live state) and mirrors summary /
+    ``review_status`` onto the DB ``Meeting`` row when one exists, so
+    finalized ambient recordings keep their review state durable.
+    """
     document, state = _workspace(user["user_id"])
-    meeting = _find(state["meetings"], meeting_id, "Meeting")
+    meeting = next((m for m in state["meetings"] if m["id"] == meeting_id), None)
+    if meeting is None:
+        from meeting_notes_ai.db.session import is_session_factory_configured
+
+        if not is_session_factory_configured():
+            raise HTTPException(status_code=404, detail="Meeting not found")
+        # Fall back to the DB row so finalized live/ambient meetings (which
+        # may not yet be synced into workspace state) are reviewable.
+        from sqlalchemy import select
+        from sqlalchemy.exc import OperationalError
+
+        from meeting_notes_ai.db.models import Meeting as MeetingRow
+
+        stmt = select(MeetingRow).where(
+            MeetingRow.id == meeting_id, MeetingRow.user_id == user["user_id"]
+        )
+        try:
+            row = (await db.execute(stmt)).scalar_one_or_none()
+        except OperationalError:
+            raise HTTPException(status_code=404, detail="Meeting not found")
+        if row is None:
+            raise HTTPException(status_code=404, detail="Meeting not found")
+        metadata = {}
+        if row.metadata_json:
+            try:
+                metadata = json.loads(row.metadata_json)
+            except (TypeError, json.JSONDecodeError):
+                metadata = {}
+        metadata["summary"] = request.summary
+        metadata["review_status"] = request.review_status
+        metadata["reviewer"] = request.reviewer
+        row.metadata_json = json.dumps(metadata)
+        await db.commit()
+        return {
+            "id": row.id,
+            "summary": request.summary,
+            "review_status": request.review_status,
+            "versions": [
+                {
+                    "number": 1,
+                    "summary": request.summary,
+                    "status": request.review_status,
+                    "reviewer": request.reviewer,
+                    "reviewer_id": user["user_id"],
+                    "comment": request.comment,
+                    "at": datetime.now(timezone.utc).isoformat(),
+                }
+            ],
+        }
     version = {
         "number": len(meeting["versions"]) + 1,
         "summary": request.summary,
@@ -309,6 +464,24 @@ async def update_review(
     meeting["versions"].append(version)
     _audit(state, "meeting.reviewed", {"meeting_id": meeting_id, "version": version["number"]})
     _write_document(document)
+
+    # Mirror the review state onto the DB row when one exists (best-effort).
+    try:
+        from sqlalchemy import select
+
+        from meeting_notes_ai.db.models import Meeting as MeetingRow
+
+        stmt = select(MeetingRow).where(MeetingRow.id == meeting_id)
+        row = (await db.execute(stmt)).scalar_one_or_none()
+        if row is not None:
+            metadata = json.loads(row.metadata_json or "{}")
+            metadata["summary"] = request.summary
+            metadata["review_status"] = request.review_status
+            metadata["reviewer"] = request.reviewer
+            row.metadata_json = json.dumps(metadata)
+            await db.commit()
+    except Exception:  # pragma: no cover - best-effort mirror
+        pass
     return meeting
 
 

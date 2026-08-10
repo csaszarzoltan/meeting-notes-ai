@@ -30,6 +30,9 @@ dependencies = [
     "google-auth>=2.35.0",
     "google-auth-oauthlib>=1.2.1",
     "google-api-python-client>=2.160.0",
+    "faster-whisper>=1.0.0",
+    "pyannote.audio>=3.1.0",
+    "torch>=2.2.0",
 ]
 
 [tool.pytest.ini_options]

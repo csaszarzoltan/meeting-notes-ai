@@ -14,6 +14,13 @@ class Settings:
     llm_provider: str = field(default_factory=lambda: os.getenv("LLM_PROVIDER", "openai"))
     llm_model: str = field(default_factory=lambda: os.getenv("LLM_MODEL", "gpt-4o"))
     whisper_model: str = field(default_factory=lambda: os.getenv("WHISPER_MODEL", "whisper-1"))
+    transcription_backend: str = field(
+        default="openai", metadata={"env": "TRANSCRIPTION_BACKEND"}
+    )
+    diarization_enabled: int = field(
+        default_factory=lambda: int(os.getenv("DIARIZATION", "0"))
+    )
+    hf_token: str = field(default_factory=lambda: os.getenv("HF_TOKEN", ""))
     max_audio_size_mb: int = field(
         default_factory=lambda: int(os.getenv("MAX_AUDIO_SIZE_MB", "25"))
     )
@@ -94,6 +101,18 @@ class Settings:
 
     # Shared patterns reference
     RAILWAY_HEALTHCHECK_PATH: str = "/healthz"
+
+    def __post_init__(self) -> None:
+        """Apply environment overrides that use a plain dataclass default.
+
+        ``transcription_backend`` keeps a plain ``default="openai"`` (so the
+        default is introspectable as a dataclass field default, which tests
+        assert), but must still honor ``TRANSCRIPTION_BACKEND`` from the
+        environment at construction time.
+        """
+        env_backend = os.getenv("TRANSCRIPTION_BACKEND")
+        if env_backend is not None:
+            self.transcription_backend = env_backend
 
     @property
     def SUPPORTED_AUDIO_FORMATS(self) -> set[str]:

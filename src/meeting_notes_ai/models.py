@@ -75,6 +75,7 @@ class TranscriptSegment(BaseModel):
     start: float = 0.0
     end: float = 0.0
     text: str = ""
+    speaker: str | None = None
 
 
 # ── Extraction ────────────────────────────────────────────────────────────────

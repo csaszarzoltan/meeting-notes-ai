@@ -40,6 +40,7 @@ from meeting_notes_ai.services.live_transcription import (
     LiveRateLimitExceeded,
     LiveTranscriptionService,
 )
+from meeting_notes_ai.services.local_transcription import LocalWhisperTranscriptionService
 from meeting_notes_ai.services.transcription import TranscriptionService
 
 router = APIRouter(prefix="/api/v1/meetings/live", tags=["live-transcription"])
@@ -56,13 +57,24 @@ def get_live_service() -> LiveTranscriptionService:
     """FastAPI dependency constructing the live transcription service.
 
     Built from the same OpenAI-backed services the REST pipeline uses
-    (``routes/meetings.py::_build_services``). Tests override this dependency
-    with a service wired to fake transcription/extraction implementations so
-    the endpoint stack (auth, WS protocol, DB) is exercised for real.
+    (``routes/meetings.py::_build_services``), unless
+    ``TRANSCRIPTION_BACKEND=local`` routes to the local faster-whisper tier
+    (P0-3) — Healthcare/Legal meetings then never touch OpenAI (P0-4).
+    Tests override this dependency with a service wired to fake
+    transcription/extraction implementations so the endpoint stack (auth, WS
+    protocol, DB) is exercised for real.
     """
     api_key = settings.openai_api_key or os.getenv("OPENAI_API_KEY", "")
+    if settings.transcription_backend == "local":
+        transcription = LocalWhisperTranscriptionService(
+            model=settings.whisper_model if settings.whisper_model != "whisper-1" else None
+        )
+    else:
+        transcription = TranscriptionService(
+            api_key=api_key, model=settings.whisper_model
+        )
     return LiveTranscriptionService(
-        transcription_service=TranscriptionService(api_key=api_key, model=settings.whisper_model),
+        transcription_service=transcription,
         extraction_service=ExtractionService(
             provider=settings.llm_provider, model=settings.llm_model, api_key=api_key
         ),

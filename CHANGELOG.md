@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.3.0] — 2026-08-10
+
+### Features
+- **In-Person Bot-Free Recording** — ambient audio capture, batch transcription, speaker diarization, and review-workspace integration. The feature adds `POST /api/v1/meetings/live/start` (draft meeting provisioning), `POST /api/v1/meetings/live/upload` (REST fallback with full validation: empty→400, wrong type→415, oversize→413, rate-limited→429), `services/local_transcription.py` (P0-3: local faster-whisper backend via `TRANSCRIPTION_BACKEND=local`, never imports OpenAI), `services/diarization.py` (P1-1: `SpeakerDiarizer` + max-overlap `assign_speakers`/`apply_diarization`, gated on `DIARIZATION=1`), `TranscriptSegment.speaker` field (P0-2: `str | None = None`), `Settings.transcription_backend`/`diarization_enabled`, finalize mode threading (P0-4 privacy fix: meeting mode now flows from DB row instead of hard-coded `"general"`), healthcare/legal `review_status: "needs_review"` via `resolve_processing_policy`, workspace review evidence (`GET /api/v1/workspace/meetings/{id}` resolves DB rows with evidence-linked `speaker`/`timestamp`/`confidence`), and `MeetingSetup.tsx` "Record in person" gate unblocked.
+
+---
+
 ## [1.2.0] — 2026-08-07
 
 ### Features
