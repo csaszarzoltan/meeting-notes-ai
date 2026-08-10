@@ -1,773 +1,287 @@
-# HIPAA Healthcare Mode — Analysis Brief
+# Analysis Brief — In-Person Bot-Free Recording (Ambient Capture + Local STT + Diarization)
 
-**Project:** MeetingNotesAI v0.3.0
-**Feature:** HIPAA-compliant healthcare mode with PHI redaction, audit logging, encryption, BAA, and compliance dashboard
-**Date:** 2026-07-30
-**Author:** analyst (t_34388f60)
+**Feature:** "Record in person" — ambient device-mic capture → batch/local Whisper transcription → speaker diarization → privacy-first review-workspace integration.
+
+**Repo:** `/home/zoltan/meeting-notes-ai` (checked-out branch `master`; task body said `main`, but the repo default is `master` — confirmed by `git branch --show-current`).
+**Analyst:** kanban t_754e14fb (this task). **Protocol:** structure work, no implementation/tests.
+**Version:** pyproject.toml reports `1.2.0` (`pyproject.toml:6`); task body said v1.1.2 — repo is newer.
+**Research source:** `/home/zoltan/meeting-notes-ai/analysis/research-brief.md` (parent t_6caff5dc, read in full) + direct repo inspection of every file cited below.
+
+---
+
+## 0. Executive Summary
+
+The "Record in person" capture card exists in the UI (`MeetingSetup.tsx:5` — 4th CAPTURE item, icon `◎`), but its primary button is disabled because `isAvailable` only admits `'Record live'` and `'Upload recording'` (`MeetingSetup.tsx:8`), and the button's disabled label literally reads `"Record in person is not available yet"`. **Critically, the entire downstream pipeline already exists and is tested**: browser-mic → WebSocket → Whisper → LLM extraction → review workspace (`useLiveSession.ts`, `routes/live_transcription.py`, `services/live_transcription.py`, `services/extraction.py`, `ReviewWorkspace.tsx`). The highest-value work is **wiring the stub** and adding **two genuine capability tiers**:
+
+1. **Local (faster-whisper) STT backend** — a `TRANSCRIPTION_BACKEND=local|openai` switch so regulated (Healthcare/Legal) meetings never send audio to a third party, returning the exact same `TranscriptionResult` shape so no downstream code changes.
+2. **Speaker diarization** — per-speaker labels carried through `TranscriptSegment.speaker` into `LiveTranscriptResponse`, extraction `assignee`, and `ReviewWorkspace` evidence.
+
+The core insight (confirmed by both the research brief and direct code inspection) is: **do not greenfield a capture mode; wire the existing live path to the in-person card and bolt on local-STT + diarization tiers.** This keeps blast radius small and reuses ~1000 already-tested lines.
 
 ---
 
 ## 1. Current State Assessment
 
-### 1.1 Codebase Overview
+Each finding is grounded in a concrete file:line.
 
-MeetingNotesAI v0.3.0 is a micro-SaaS for meeting transcription and structured notes, deployed on Railway. Current architecture:
+### 1.1 Frontend — the gate is the only true gap
+- `frontend/src/workspace/MeetingSetup.tsx:5` — `CAPTURE = ['Record live', 'Upload recording', 'Import calendar meeting', 'Record in person']`. The 4th element ('Record in person', icon `◎`, desc `"In-person workflow preview"`) **is rendered and selectable**; selecting it just highlights the card.
+- `MeetingSetup.tsx:8` — `const isAvailable = capture === 'Record live' || capture === 'Upload recording'`. 'Record in person' is **not** in `isAvailable`.
+- `MeetingSetup.tsx:10 (button JSX)` — `<button className="primary full" disabled={!isAvailable} onClick={() => capture === 'Record live' ? onLive() : setConfigured(true)}>{isAvailable ? `Continue with ${capture}` : `${capture} is not available yet`}</button>`. So for 'Record in person': button disabled, label `"Record in person is not available yet"`. **This is the entire frontend blocker.**
+- The `Record live` mode calls `onLive()` → `App.tsx:47` `onLive={() => setLive(true)}` → renders `LiveWorkspace` (`App.tsx:44`).
+- `App.tsx:43` — `ReviewWorkspace` renders when a meeting is `selected` or `result` is set. `onComplete={setResult}` (`App.tsx:47`) is how upload flows drop into review. So there are **two** downstream targets already wired: live (`setLive`) and review (`setResult`).
 
-| Layer | Technology | Notes |
-|-------|-----------|-------|
-| Web framework | FastAPI 0.115+ | Async, lifespan events, APIRouter pattern |
-| Database | SQLAlchemy 2.0.51 (async) | In-memory SQLite for tests, Railway Postgres in prod |
-| Auth | JWT (python-jose) + bcrypt (passlib) | 24h token expiry, team roles (admin/member/viewer) |
-| LLM | OpenAI client (gpt-4o) | ExtractionService for structured data from transcripts |
-| Audio | OpenAI Whisper API | TranscriptionService wrapper |
-| Export | Custom ExportService | JSON, Markdown, PDF (weasyprint), ZIP |
-| Mode services | HealthcareService, LegalService | Thin wrappers around ExtractionService |
-| Test pattern | pytest with interface + behavioral tests | 341 passing, 4 pre-existing auth failures |
+### 1.2 Frontend — capture machinery already built (keep it)
+- `frontend/src/live/useLiveSession.ts:117-134` — picks `audio/webm;codecs=opus` else `audio/webm` (`MediaRecorder.isTypeSupported`), `recorder.start(1000)` (1s timeslice), streams binary WebM chunks over a JWT WebSocket. Mic-permission errors are mapped to a user-facing message (`useLiveSession.ts:187-191`: `NotAllowedError` → "Microphone permission denied…").
+- `useLiveSession.ts:196-204` — `finalize()` sends `{"type":"finalize"}` control frame; finalized result carries transcript/summary/action_items/decisions (`LiveTranscriptionView.tsx:178-213`).
+- `LiveTranscriptionView.tsx:5-13` — `STATUS_LABEL` maps the full `LiveStatus` (idle→error) to UI text — exactly the "recording status" the task's acceptance criteria #6 asks for. It already surfaces recording status, partial count, sequence, and duration.
+- `frontend/src/workspace/LiveWorkspace.tsx` — thin wrapper rendering `LiveTranscriptionView`.
+- **Important gap for #6/#4:** after `finalize`, `LiveTranscriptionView.tsx` shows a static "finalized" overlay (`:178-213`) and **does not navigate/route into `ReviewWorkspace`**. There is no `useNavigate`-style transition from finalize → review. This is a **real missing integration** (research FC-5).
 
-### 1.2 Existing Healthcare Mode (v0.3.0 baseline)
+### 1.3 Backend — full streaming pipeline exists and is tested
+- `src/meeting_notes_ai/routes/live_transcription.py`:
+  - `get_live_service()` (`:55-70`) builds `LiveTranscriptionService` with `TranscriptionService(api_key=api_key, model=settings.whisper_model)` + `ExtractionService`. **This is the single construction point to rewire for the local backend.**
+  - WebSocket `""` (`:73-186`) — JWT (token query param), meeting/room/team scoping, binary chunks (WebM magic detection `:147-152`), partial frames, `finalize` control frame.
+  - `POST /start` (`:189-212`) — provisions a draft `Meeting` row the WS attaches to (owner/team checks).
+  - `POST /upload` (`:215-244`) — REST fallback; empty→`400` (`:225`), unsupported content-type→`415` (`:229`), >`max_audio_size_mb`→`413` (`:234`), rate-limit→`429` (`:243`). **This is the reference for audio-upload validation the pre-tester's ambient-recording tests should target.**
+- `src/meeting_notes_ai/services/live_transcription.py`:
+  - `ingest_chunk` (`:185-219`) accumulates audio and re-transcribes the **whole accumulated buffer** per chunk (`:208-209`) — **O(n²) for long rooms** (research risk — batch finalize path avoids this).
+  - `finalize` (`:230-279`) — transcribe + extract + persist meeting (transcript + summary in `metadata_json` via `_persist_meeting` `:378-422`), marks session `FINALIZED`.
+  - `transcribe_file` (`:281-328`) — REST batch path, creates meeting with `create_if_missing=True`.
+  - `_assemble_audio` (`:424-431`) / `_pcm16_to_wav` (`:88-114`) — frames 16 kHz PCM as WAV; WebM chunks concatenated raw.
+  - `LiveRateLimitExceeded` (`:84`) — mapped to 429 / WS error frame.
+- **NOTE on rate limiting:** `create_session` (`:139-165`)/`finalize`/`transcribe_file` do **not** pass `hipaa`/`phi_classification` through to the persist path, and `finalize` hard-codes `mode="general"` (`finalize` `:253`, `_persist_meeting` `:259`). A Healthcare/Legal in-person meeting would be persisted as `general` → **the privacy tier (FC-4) requires threading meeting `mode`/`hipaa` through finalize/transcribe_file.** Grounded at `live_transcription.py:253 & 259`.
 
-The current `HealthcareService` in `src/meeting_notes_ai/services/healthcare.py` provides:
+### 1.4 Models & config — extension points already present
+- `src/meeting_notes_ai/models.py:67-77` — `TranscriptionResult` (text/language/duration_seconds/`segments`) and `TranscriptSegment` (start/end/text). **No `speaker` field yet** — diarization needs to add `speaker: str | None = None` to `TranscriptSegment`.
+- `models.py:107-117` (ConsentStatus/HealthcareNote), `:83-88` `ExtractionResult`, `ActionItem` (assignee). `ExtractionResult.action_items[].assignee` already exists — diarized speaker can seed `assignee`.
+- `src/meeting_notes_ai/config.py:16` — `whisper_model` env (`WHISPER_MODEL`, default `"whisper-1"`). Only interpreted as an OpenAI model name today. **Add `transcription_backend` (`TRANSCRIPTION_BACKEND`, default `"openai"`) here.**
+- `config.py:98-101` — `SUPPORTED_AUDIO_FORMATS = {audio/wav, audio/mpeg, audio/mp4, audio/webm}`.
+- `config.py:17-19` — `max_audio_size_mb` default 25 (OpenAI cap). Local backend can raise this but keep default for parity.
+- `src/meeting_notes_ai/services/workflow.py:21-35` — `resolve_processing_policy(mode, phi_redaction)` returns `ProcessingPolicy(phi_redaction, review_required)`; Healthcare → redaction+review, Legal → review. **Reuse this to gate the no-third-party assertion for the local tier.**
+- `src/meeting_notes_ai/services/transcription.py` — `TranscriptionService.transcribe(audio_bytes, filename, language=None) -> TranscriptionResult` (`:26-76`). This is the **interface the local backend must share** (research hint §3 "keep the existing TranscriptionService interface").
 
-- **SOAP note formatting** — splits extraction result into subjective/objective/assessment/plan sections via heuristic helper functions (`_extract_subjective`, `_extract_objective`, `_extract_assessment`, `_extract_plan`)
-- **HIPAA marker generation** — `_generate_hipaa_markers()` creates `HIPAAMarker` objects with field/risk_level/recommendation, triggered by presence of `patient_id` or extraction content
-- **Consent tracking** — `ConsentStatus` with `confirmed` boolean and timestamp
-- **De-identification flag** — `de_identified` boolean set to `True` when `patient_id` is None
+### 1.5 Review workspace integration point
+- `src/meeting_notes_ai/routes/workspace.py:292-311` — `PATCH /meetings/{meeting_id}/review` persists `summary` + `review_status` (`needs_review|in_review|approved|rejected`) + reviewer + audit. This is the **write-back** side for review integration.
+- `workspace.py:226-255` — `POST /meetings` creates meeting + initial `evidence` list; `evidence` items carry `speaker` ("Speaker 1"), `timestamp`, `text`, `confidence` (`:236-239`).
+- `workspace.py:283-310` — `GET /meetings/{id}` detail; `meeting_detail` → used by `ReviewWorkspace.tsx:12` to load detail.
+- `frontend/src/workspace/ReviewWorkspace.tsx:5` — `fromUpload` maps a `MeetingResult` into `MeetingDetail` (title/date/duration/participants/review_status/evidence/versions/decisions/audio_url). `:6` — `ReviewTab = 'Notes'|'Transcript'|'Evidence'|'Actions'`. Evidence fallback `:8` shows `speaker`/`timestamp`/`text`/`confidence`. So `ReviewWorkspace` **already renders a `speaker` field per evidence item** — diarized speaker labels will surface here with zero frontend schema change.
+- **Gap:** the live path ends at `LiveTranscriptionView` finalize overlay, not `ReviewWorkspace`. To satisfy acceptance #4 + research FC-5, the finalized in-person meeting must navigate into review (either `selected` detail or a `result`-shaped object).
 
-**Gaps for HIPAA compliance:**
-1. No PHI pattern detection or redaction — the service flags PHI risks but does not detect or remove actual PHI data (names, SSN, DOB, medical record numbers, etc.)
-2. No configurable regex patterns for 18 HIPAA identifiers
-3. No LLM-based validation layer to catch regex misses
-4. No audit logging of PHI access or processing events
-5. No encryption at rest for stored healthcare data
-6. No BAA (Business Associate Agreement) template or management
-7. No compliance dashboard or reporting
-8. OpenAPI key hardcoded as TODO in auth.py (`SECRET_KEY`)
-
-### 1.3 Existing Pydantic Models (relevant to healthcare)
-
-Located in `src/meeting_notes_ai/models.py`:
-- `MeetingMode.HEALTHCARE` enum value
-- `SOAPNote` — subjective, objective, assessment, plan fields
-- `HIPAAMarker` — field, risk_level (high/medium/low), recommendation
-- `ConsentStatus` — confirmed (bool), timestamp, note
-- `HealthcareNote` — soap, hipaa_markers, consent_status, de_identified
-
-### 1.4 Test Coverage
-
-Healthcare-specific tests in `tests/test_healthcare_mode.py`:
-- 16 interface tests (class exists, signatures, defaults, instantiation)
-- 5 behavioral tests (process returns HealthcareNote, patient_id markers, consent, empty transcript)
-- All use mocked ExtractionService (AsyncMock)
+### 1.6 Testing baseline (for pre-tester handoff)
+- 51 test files under `tests/`. Existing relevant coverage: `test_live_session.py`, `test_live_transcription.py`, `test_live_ui.py`, `test_upload*.py` (within `test_live_transcription`), `test_transcription.py`, `test_review_remediation_v112.py`, `test_workspace_api_v102.py`.
+- **The pre-tester test seam pattern** is established in `tests/test_live_ui.py`:
+  - `_FakeTranscription` (`:25-36`) and `_FakeExtraction` (`:39-50`) duck-typed AI seams returning deterministic `TranscriptionResult`/`ExtractionResult`.
+  - `app.dependency_overrides[get_live_service] = lambda: service` (`:159`) to swap in the fake-backed service — **the exact pattern the new diarization/ambient tests should reuse.**
+  - Interface tests introspect route registration (`:66-84`) and handler signatures (`:77-84`).
+- **Frontend JS tests: NONE.** `frontend/package.json` (`:7-12`) has only `dev/build/preview/typecheck` scripts, no vitest/jest/test script, and no test devDependency (`:17-23`). **Conclusion: "add a frontend test if a pattern exists" → no frontend JS test pattern exists. The pre-tester must validate the MeetingSetup card via backend UI-glue tests (`test_live_ui.py`-style: `/app/live` route + CSP/Permissions-Policy) and negative-availability assertions, or leave UI behavior to the tester's E2E/Playwright smoke.** Do NOT invent a JS test framework.
 
 ---
 
 ## 2. Clustered Options
 
-### 2.1 PHI Handling & Redaction
+Clustered from `research-brief.md` §2 (6 feature candidates) + repo constraints. Options are grouped by the decision they force.
 
-| Option | Approach | Complexity | Coverage | Maintenance |
-|--------|----------|-----------|----------|-------------|
-| **A. Regex-only** | Predefined patterns for the 18 HIPAA identifiers | Low | Medium (misses novel patterns) | Low |
-| **B. LLM-only** | Delegate all PHI detection to LLM via prompt engineering | Medium | High (context-aware) | Medium |
-| **C. Hybrid (chosen)** | Regex pre-scan for common patterns + LLM validation pass | Medium-High | High (catch + validate) | Medium |
+### Cluster A — Capture path: reuse live WS vs. new batch-only path
+- **A1 (chosen): Reuse the existing live WebSocket pipeline** (`useLiveSession.ts` + `routes/live_transcription.py`). Already built + tested; the in-person card becomes a thin activation of `onLive()`. Cost: the `ingest_chunk` O(n²) accumulate loop (mitigated by a dedicated batch finalize — see A2).
+- A2: **Add a record-then-transcribe-batch path** for long in-person rooms: capture uses the same mic/WS, but on finalize the client sends accumulated WebM once (via existing `POST /upload` / `transcribe_file`) instead of re-transcribing each chunk. Lower API cost, no live partials. **Recommended as P1 (not P0)** — P0 wires the live path; batch finalize becomes a latency/cost refinement.
+- Rejected: building a brand-new WebSocket protocol for in-person only — duplicates 1000+ tested lines for no behavioral gain.
 
-**Chosen: Option C — Hybrid Regex + LLM Validation.** Regex catches 90%+ of standard PHI patterns (SSN, DOB, MRN, phone, email, name patterns) with near-zero latency. The LLM validation pass catches context-dependent PHI (e.g., "the patient's rare condition identifies them") and reduces false positives from regex over-match. This is the industry standard approach (ref: AWS Comprehend Medical, Azure Health Bot).
+### Cluster B — Transcription backend: OpenAI API vs. local
+- **B1 (chosen, both): Dual backend, switch by env.** `TRANSCRIPTION_BACKEND=openai|local`. Openai = existing `TranscriptionService` (already correct). Local = new `LocalWhisperTranscriptionService` backed by **faster-whisper** (CTranslate2). Shared return shape `TranscriptionResult` → zero downstream change. Regulated mode (Healthcare/Legal) + `local` → assert no OpenAI call.
+- B2 (rejected as default): local-only. Higher infra burden (model download on first day), worse accuracy ceiling for casual users, and there's no consumer-ready packaging in-repo. Keep local as opt-in tier.
+- Model tiers (research §3, faster-whisper): `small` (fast CPU) → `large-v3-turbo` (near-API accuracy); `compute_type="int8"` on CPU. `WHISPER_MODEL=local:large-v3-turbo` encoding or a separate `LOCAL_WHISPER_MODEL`.
 
-### 2.2 Audit Logging
+### Cluster C — Diarization
+- **C1 (chosen for P1): pyannote.audio 3.1** (`pyannote/speaker-diarization-3.1`), gated HF token, mono 16 kHz RTTM, then **max-overlap alignment** against Whisper word/segment timestamps. Best-accuracy open model (DER ~11–19%), self-hostable (privacy parity target).
+- C2: OpenAI `gpt-4o-transcribe-diarize` — cloud, built-in, simplest, but **sends audio off-server** → fails the local privacy tier. Keep as a `backend=openai` convenience option behind the same speaker-label interface.
+- C3 (rejected now): WhisperX end-to-end — pulls heavier dep set + wants GPU; overkill for P0/P1, can be revisited.
+- **Design principle (research §3 + §4):** diarization is **best-effort post-processing**; the review workspace lets users **correct speaker labels**, never a hard guarantee. Speaker labels flow: `TranscriptSegment.speaker` → `LiveTranscriptResponse` → extraction `assignee` seed → `ReviewWorkspace` evidence `speaker`.
 
-| Option | Approach | Durability | Queryability | Complexity |
-|--------|----------|-----------|-------------|-----------|
-| **A. DB table** | SQLAlchemy model in same Postgres | High | High (SQL queries) | Low |
-| **B. JSONL file** (chosen) | Append-only JSONL on filesystem or S3 | High | Medium (streaming grep) | Low |
-| **C. External service** | Push to Splunk/DataDog/CloudWatch | High | High | High |
+### Cluster D — Audio upload endpoint & storage
+- D1 (chosen): Reuse `POST /api/v1/meetings/live/upload` (`routes/live_transcription.py:215`) as the batch upload endpoint — already has empty/415/413/429 validation. For the ambient-recording spec, pre-tester targets this exact endpoint contract.
+- D2 (optional P2): a dedicated `POST /api/v1/meetings/in-person/{id}/audio` streaming endpoint for long recs (chunk-append to object storage). **Not needed for P0** — `transcribe_file` handles a full upload; storage already configured (local dir / S3 via `config.py:56-73`). Skip unless the tester discovers a 25 MB hardship.
+- Storage: keep **existing storage backend** (`config.py:56-73`: `STORAGE_BACKEND=local|s3`, encryption, retention). In-person audio is stored identically to live/upload; no new storage path.
 
-**Chosen: Option B — Append-only JSONL.** Rationale: immutable by design (append-only = no UPDATE/DELETE), simple to implement, HIPAA audit logs are write-once/read-rarely so SQL overhead is unnecessary. Each row is a self-contained JSON object with timestamp, actor, action, resource, PHI classification, and outcome. Can be rotated and archived. Optionally shipped to external SIEM later without schema changes.
-
-### 2.3 AES-256 Encryption at Rest
-
-| Option | Approach | Key Management | Performance | Complexity |
-|--------|----------|---------------|-------------|-----------|
-| **A. Application-level** | Encrypt/decrypt PHI fields in Python before DB write | Custom per-tenant key storage | Medium | Medium |
-| **B. DB-level** | Postgres `pgcrypto` or TDE | DB-managed | High | Low (transparent) |
-| **C. Hybrid (chosen)** | Application envelope encryption (AES-256-GCM + per-tenant KEK) | KEK in env, DEK per tenant stored encrypted | Medium | Medium-High |
-
-**Chosen: Option C — Application envelope encryption.** Rationale: healthcare transcription is a multi-tenant SaaS — per-tenant keys are required to isolate PHI between practices. Postgres-level encryption (Option B) provides DB-at-rest but not per-tenant isolation. Application-level with envelope encryption (AWS KMS-inspired pattern): a master key encrypts per-tenant data encryption keys (DEKs), which encrypt individual fields. This gives us tenant isolation, key rotation capability, and auditable key access.
-
-### 2.4 BAA Template
-
-| Option | Approach | Flexibility | Maintenance |
-|--------|----------|-----------|-------------|
-| **A. Static file** | Hardcoded template in repo | Low | Low |
-| **B. Markdown template** (chosen) | Jinja2/Markdown template with variable substitution | Medium | Low |
-| **C. API-generated** | Dynamic PDF generation with provider-specific clauses | High | High |
-
-**Chosen: Option B — Markdown template with Jinja2 substitution.** Generates BAA as Markdown (easily reviewed) with option to render as PDF. Template includes organization name, dates, service description, and both parties' obligations per HIPAA §164.504(e). Static clauses standard, variable fields for provider details.
-
-### 2.5 Compliance Dashboard
-
-| Option | Approach | Richness | Complexity |
-|--------|----------|---------|-----------|
-| **A. Simple HTML page** | Server-rendered dashboard with charts | Low | Low |
-| **B. JSON API only** (chosen) | REST endpoints returning compliance metrics | Medium | Low |
-| **C. React/Frontend app** | Full SPA with WebSocket real-time updates | High | High |
-
-**Chosen: Option B — JSON API + simple static HTML.** A lightweight set of GET endpoints (`/compliance/dashboard/summary`, `/compliance/audit-log`, `/compliance/phi-stats`) that return structured JSON. A companion minimal HTML page with Chart.js renders the data client-side. No framework build step. This can later be upgraded to a full dashboard.
+### Cluster E — Privacy tier plumbing
+- E1 (chosen): `resolve_processing_policy()` (`workflow.py:21`) gates `phi_redaction`/`review_required`. Backend=local asserts **no OpenAI call** for Healthcare/Legal. Thread meeting `mode`/`hipaa` through `finalize`/`transcribe_file` (currently hard-coded `"general"` at `live_transcription.py:253/259`). UI already claims "Encrypted processing / Zürich / EU" (`MeetingSetup.tsx` data-path aside) — local backend makes that honest.
+- E2 (deferred): new explicit "audio stays on your hardware" toggle beyond what the data-path panel already shows. Nice-to-have copy, P2.
 
 ---
 
-## 3. Chosen Tech Stack
+## 3. Chosen Tech Stack (with rationale)
 
-| Component | Technology | Rationale |
-|-----------|-----------|-----------|
-| PHI Regex patterns | `re` (stdlib) + configurable JSON file | Zero deps, easily auditable, hot-reloadable |
-| LLM validation | OpenAI gpt-4o (existing) | Already in stack, async OpenAI client available |
-| Audit log storage | Append-only JSONL on filesystem | Immutable, simple, no schema, rotate via logrotate |
-| Encryption | `cryptography` library (AES-256-GCM) | Python stdlib alternative: `cryptography` is battle-tested, FIPS-compliant |
-| Key management | Environment-based KEK + per-tenant DEK stored encrypted in DB | No external KMS dependency for v1; upgrade path to AWS KMS/HashiCorp Vault |
-| BAA template | Jinja2 + markdown | `jinja2` is already an optional dep via `weasyprint`; markdown for version control |
-| Compliance API | FastAPI (existing) | No new framework; reuses existing auth/db dependencies |
-| Dashboard HTML | Jinja2 template + Chart.js CDN | No build step, server-rendered, skippable if pro plan |
-| Testing | pytest + pytest-asyncio (existing) | Same test patterns, fixtures in conftest.py |
+| Concern | Choice | Rationale (grounded) |
+|---|---|---|
+| Capture | Reuse `useLiveSession.ts` MediaRecorder → WS | Already built + tested (`useLiveSession.ts:117-134`). In-person = activate `onLive()` on the 4th card. Cross-browser WebM/Opus caveat documented (research §4); accepted for P0. |
+| STT (openai tier) | Existing `TranscriptionService` (`transcription.py:26`) | Already correct; keep as `TRANSCRIPTION_BACKEND=openai` default. |
+| STT (local tier) | New `LocalWhisperTranscriptionService` via **faster-whisper** (CTranslate2), `compute_type="int8"`, WAV input, shared `TranscriptionResult` | Privacy/compliance win; zero downstream change (interface parity). Faster-whisper is the canonical local backend (research FC-2). |
+| Backend switch | `TRANSCRIPTION_BACKEND` env + a `WhisperTranscriber` protocol in a new module | Selection lives in ONE place: `get_live_service()` (`routes/live_transcription.py:55-70`) and `routes/meetings.py::_build_services` (`:24-27`). |
+| Diarization | **pyannote.audio 3.1** (P1), gated HF token, mono 16 kHz, max-overlap alignment; optional OpenAI `gpt-4o-transcribe-diarize` for openai backend | Best open accuracy, self-hostable. See Cluster C. |
+| Upload endpoint | Reuse `POST /api/v1/meetings/live/upload` (`routes/live_transcription.py:215`) | Already validates empty/415/413/429. Directly targetable by pre-tester. |
+| Storage | Existing backend (`config.py:56-73`, local/S3 + encryption + retention) | No new storage path needed. |
+| Review integration | Route finalized in-person meeting into `ReviewWorkspace` via `POST /meetings` (`workspace.py:226`) + `PATCH /meetings/{id}/review` (`workspace.py:292`) | Evidence `speaker` field already rendered (`ReviewWorkspace.tsx:8`). |
+| Privacy policy | `resolve_processing_policy()` (`workflow.py:21`) + hard no-OpenAI assert for Healthcare/Legal+local | Reuses existing safeguards; no new policy engine. |
+| Frontend state | Extend `LiveStatus`/MeetingSetup `isAvailable` + post-finalize navigation to review | Minimal surface: unblock the card + add a review transition. |
 
-**New dependencies (to add to pyproject.toml):**
-- `cryptography>=42.0.0` — AES-256-GCM encryption
-- `jinja2>=3.1.0` — BAA template rendering (may already be installed via weasyprint dep)
-
-**No new dependencies for:**
-- PHI regex — Python stdlib `re`
-- Audit logging — stdlib `json`, `logging`, `pathlib`
-- JSONL rotation — stdlib `logging.handlers.RotatingFileHandler`
-
----
-
-## 4. Shared Infrastructure (Build First)
-
-These components are prerequisites for all 5 feature areas. Must be constructed before any P0 feature work begins.
-
-### 4.1 HIPAA Configuration Module
-
-**Module:** `src/meeting_notes_ai/hipaa/config.py`
-
-Purpose: Central configuration for HIPAA mode — PHI regex patterns, encryption settings, audit log paths, BAA defaults. Extends `Settings` dataclass.
-
-```python
-@dataclass
-class HIPAAConfig:
-    phi_patterns_path: str = "hipaa/phi_patterns.json"       # Relative to app root
-    audit_log_dir: str = "data/audit_logs/"
-    audit_log_retention_days: int = 365 * 6  # 6 years per HIPAA
-    encryption_enabled: bool = True
-    master_key_env_var: str = "HIPAA_MASTER_KEY"
-    default_baa_effective_days: int = 365
-    llm_validation_enabled: bool = True
-    llm_validation_threshold: float = 0.8    # Confidence threshold
-```
-
-### 4.2 PHI Patterns Registry
-
-**Module:** `src/meeting_notes_ai/hipaa/phi_patterns.py`
-**Data file:** `src/meeting_notes_ai/hipaa/phi_patterns.json`
-
-JSON schema for the 18 HIPAA identifiers:
-```json
-{
-  "categories": [
-    {
-      "name": "name",
-      "label": "Patient Names",
-      "risk_level": "high",
-      "patterns": ["\\b[A-Z][a-z]+\\s[A-Z][a-z]+\\b"],
-      "example": "John Smith"
-    },
-    {
-      "name": "ssn",
-      "label": "Social Security Number",
-      "risk_level": "high",
-      "patterns": ["\\b\\d{3}-\\d{2}-\\d{4}\\b"],
-      "example": "123-45-6789"
-    },
-    {
-      "name": "dob",
-      "label": "Date of Birth",
-      "risk_level": "high",
-      "patterns": ["\\b\\d{1,2}/\\d{1,2}/\\d{2,4}\\b"],
-      "example": "01/15/1980"
-    },
-    {
-      "name": "phone",
-      "label": "Phone Number",
-      "risk_level": "high",
-      "patterns": ["\\b\\d{3}[-.]?\\d{3}[-.]?\\d{4}\\b"],
-      "example": "555-123-4567"
-    },
-    {
-      "name": "email",
-      "label": "Email Address",
-      "risk_level": "high",
-      "patterns": ["\\b[\\w.-]+@[\\w.-]+\\.\\w+\\b"],
-      "example": "jane@example.com"
-    },
-    {
-      "name": "address",
-      "label": "Street Address",
-      "risk_level": "high",
-      "patterns": ["\\b\\d+\\s[A-Z][a-zA-Z]+\\s(St|Street|Ave|Avenue|Rd|Road|Dr|Drive|Ln|Lane|Blvd|Boulevard)\\b"],
-      "example": "123 Main St"
-    },
-    {
-      "name": "mrn",
-      "label": "Medical Record Number",
-      "risk_level": "high",
-      "patterns": ["\\bMRN[\\s:-]*\\d{4,10}\\b", "\\b\\d{4,10}\\b(?=\\s*\\|)"],
-      "example": "MRN: 1234567"
-    },
-    {
-      "name": "health_plan_id",
-      "label": "Health Plan Beneficiary Number",
-      "risk_level": "high",
-      "patterns": ["\\b[A-Z]{2,3}\\d{5,10}\\b"],
-      "example": "XYZ1234567"
-    },
-    {
-      "name": "account_number",
-      "label": "Account Number",
-      "risk_level": "medium",
-      "patterns": ["\\b[Aa]ccount\\s*#?:?\\s*\\d{4,10}\\b"],
-      "example": "Account #123456"
-    },
-    {
-      "name": "certificate_number",
-      "label": "Certificate/License Number",
-      "risk_level": "medium",
-      "patterns": ["\\b(DEA|NPI|License|Lic)[\\s#:]*\\d{6,15}\\b"],
-      "example": "DEA 123456789"
-    },
-    {
-      "name": "vehicle_id",
-      "label": "Vehicle Identifier",
-      "risk_level": "medium",
-      "patterns": ["\\b[A-Z]{1,3}\\d{2,4}[A-Z]{1,3}\\b"],
-      "example": "ABC1234"
-    },
-    {
-      "name": "device_id",
-      "label": "Device Identifier/Serial",
-      "risk_level": "medium",
-      "patterns": ["\\b(SN|Serial)[:\\s]*[A-Z0-9]{6,15}\\b"],
-      "example": "SN: X7Y8Z9A1"
-    },
-    {
-      "name": "url",
-      "label": "Web URL",
-      "risk_level": "low",
-      "patterns": ["https?://[\\w./-]+"],
-      "example": "https://example.com"
-    },
-    {
-      "name": "ip_address",
-      "label": "IP Address",
-      "risk_level": "low",
-      "patterns": ["\\b\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\b"],
-      "example": "192.168.1.1"
-    },
-    {
-      "name": "biometric_id",
-      "label": "Biometric Identifier",
-      "risk_level": "high",
-      "patterns": [],
-      "example": "Fingerprint template ref"
-    },
-    {
-      "name": "photo",
-      "label": "Full Face Photo",
-      "risk_level": "high",
-      "patterns": [],
-      "example": "Photographic image ref"
-    },
-    {
-      "name": "medical_record_ref",
-      "label": "Medical Record Reference",
-      "risk_level": "medium",
-      "patterns": ["\\b(Chart|Record|File)[\\s#:]*\\d{4,10}\\b"],
-      "example": "Chart #12345"
-    },
-    {
-      "name": "other_phi",
-      "label": "Other Unique Identifying Number",
-      "risk_level": "medium",
-      "patterns": [],
-      "example": "Any other unique identifier"
-    }
-  ]
-}
-```
-
-### 4.3 Database Models Extensions
-
-**Module:** `src/meeting_notes_ai/db/models.py` (additions)
-
-New ORM models:
-- `EncryptionKey` — per-tenant data encryption key (wrapped)
-- `AuditLogEntry` — lightweight reference copy for recent entries (JSONL is primary)
-- `BAATemplate` — template versions
-- `BAAgreement` — signed BAA records per tenant
-- `ComplianceEvent` — compliance-relevant event summary
-
-### 4.4 Middleware / Dependency Base
-
-**Module:** `src/meeting_notes_ai/hipaa/middleware.py`
-
-FastAPI middleware that:
-- Injects `HIPAAConfig` into request scope
-- Provides `get_phi_redactor` dependency
-- Provides `get_audit_logger` dependency
-- Provides `get_encryption_service` dependency
-- Optionally wraps healthcare mode endpoints with automatic audit logging
+**Decisions locked:**
+1. **Whisper API vs local → BOTH**, switched by `TRANSCRIPTION_BACKEND`; local via faster-whisper. Do not replace the API path.
+2. **Diarization → pyannote.audio 3.1** (openai tier optional `gpt-4o-transcribe-diarize`) behind a shared speaker-label interface; best-effort + UI correction.
+3. **Audio upload design → reuse `POST /live/upload`** (validation contract already defined); no new endpoint for P0.
+4. **Storage → existing backend**, no change.
+5. **Frontend capture hook → reuse `useLiveSession`**, activate `onLive()` for the 4th card, add finalize→review navigation.
 
 ---
 
-## 5. Prioritized Task List
+## 4. Prioritized Task List (P0 / P1 / P2)
 
-### P0 — Core HIPAA Infrastructure (Must Have)
-
-#### T1. PHI Patterns Registry & Configurable Redaction Engine
-
-**Module:** `src/meeting_notes_ai/hipaa/` — `phi_patterns.py`, `phi_patterns.json`, `redactor.py`
-**Expected Behavior:**
-- Load patterns from JSON at startup with hot-reload capability
-- Scan text against all 18 HIPAA identifier regex patterns
-- Return structured PHI matches with category, position, risk_level, matched_text
-- Support redaction modes: `mask` (replace with `[REDACTED]`), `hash` (replace with SHA-256 hash), `truncate` (remove), `annotate` (wrap in `<PHI type="...">...</PHI>`)
-- Track redaction statistics per category
-
-**Interface:**
-```python
-@dataclass
-class PHIMatch:
-    category: str              # Pattern category name
-    label: str                 # Human-readable label
-    risk_level: Literal["high", "medium", "low"]
-    start: int                 # Character offset
-    end: int
-    matched_text: str          # Original matched text
-    redaction_mode: str        # Applied redaction mode
-
-class PHIRedactor:
-    def __init__(self, config: HIPAAConfig): ...
-    def scan(self, text: str) -> list[PHIMatch]: ...
-    def redact(self, text: str, mode: str = "mask") -> tuple[str, list[PHIMatch]]: ...
-    def add_custom_pattern(self, name: str, pattern: str, risk_level: str) -> None: ...
-    def get_stats(self) -> dict: ...
-    def reload_patterns(self) -> int: ...  # Hot-reload patterns file
-```
-
-**Data Models:**
-- `PHIMatch` dataclass (above)
-- `PHIRedactionResult` — `redacted_text: str`, `matches: list[PHIMatch]`, `count_by_category: dict`
-
-**API Endpoints:**
-- `POST /api/v1/hipaa/scan` — Scan text for PHI without redacting (returns matches)
-- `POST /api/v1/hipaa/redact` — Redact PHI from text (returns redacted + matches)
-- `GET /api/v1/hipaa/patterns` — List configured patterns
-- `GET /api/v1/hipaa/patterns/stats` — Pattern match statistics
-
-**Dependencies:** HIPAAConfig (shared infra), phi_patterns.json
-
-**Acceptance Criteria:**
-- [ ] All 18 HIPAA identifier categories have at least one regex pattern each
-- [ ] `scan()` detects SSN, DOB, phone, email in sample text
-- [ ] `redact(mode="mask")` replaces with `[REDACTED]` placeholders
-- [ ] `redact(mode="hash")` replaces with deterministic SHA-256 prefix
-- [ ] Custom patterns can be added at runtime via `add_custom_pattern()`
-- [ ] Patterns hot-reloadable via `reload_patterns()` without app restart
-- [ ] Edge cases handled: empty text, nested PHI, overlapping matches, Unicode
-- [ ] Performance: 50KB text scanned in < 100ms
+Each task: **module, expected behavior, interface description, dependencies, acceptance criteria.** All file:line refs = current repo ground truth.
 
 ---
 
-#### T2. LLM PHI Validation Pass
+### P0-1 — Unblock the "Record in person" card and route to live capture
+- **Module:** `frontend/src/workspace/MeetingSetup.tsx` (and `App.tsx` only if a distinct route is warranted).
+- **Expected behavior:** Selecting "Record in person" makes the primary button enabled; clicking it enters the live capture flow (same as "Record live": `onLive()` → `setLive(true)` → `LiveWorkspace` at `App.tsx:44/47`). The "…is not available yet" label is gone.
+- **Interface:** `isAvailable` (currently `MeetingSetup.tsx:8`) must include `'Record in person'`; the button `onClick` (`capture === 'Record live' ? onLive() : setConfigured(true)`, `MeetingSetup.tsx:10`) must map `'Record in person'` → `onLive()` (or a new `onInPerson` prop wired in `App.tsx:47` the same way — either is acceptable; keep the SHA to one file if possible).
+- **Dependencies:** none (pure frontend #1 of the acceptance criteria).
+- **Acceptance criteria:**
+  - Selecting "Record in person" enables the primary CTA; label reads `Continue with Record in person`.
+  - Clicking navigates into `LiveWorkspace` (same route as live).
+  - No regression to the other three cards (`Record live`, `Upload recording`, `Import calendar meeting` behave unchanged).
+  - **Pre-tester:** negative availability assertions + `/app/live` UI-glue tests (CSP allows mic/WS, `Permissions-Policy` has microphone) à la `tests/test_live_ui.py:255-277`. No JS framework exists.
 
-**Module:** `src/meeting_notes_ai/hipaa/llm_validator.py`
-**Expected Behavior:**
-- After regex scan, pass redacted text + original PHI matches to LLM for validation
-- LLM identifies: false positives (non-PHI caught by regex), missed PHI (not caught by regex), contextual PHI (e.g., rare condition + location = identifying)
-- Returns validated match list with confidence scores
-- Optional mode: LLM can request re-redaction of previously missed PHI
-- No LLM call if `llm_validation_enabled` is False
+### P0-2 — Add diarization primitive to the transcript data model
+- **Module:** `src/meeting_notes_ai/models.py` (add `speaker`) + `src/meeting_notes_ai/live_session.py` (surface in responses) + `src/meeting_notes_ai/services/extraction.py` (seed `assignee`).
+- **Expected behavior:** `TranscriptSegment` gains an optional `speaker`; `LiveTranscriptResponse` (and any batch response) can carry per-segment speaker labels; `ExtractionService` prompt optionally receives speaker-tagged transcript for assignee seeding.
+- **Interface:**
+  - `models.py:74-77` — `TranscriptSegment` add `speaker: str | None = None` (backwards compatible default).
+  - `services/transcription.py:62-69` — when the provider returns speaker info, populate the new field (currently only start/end/text mapped).
+  - `live_session.py` `LiveTranscriptResponse` (`:124-147`) — add optional `speakers: dict[int,str] | None` or extend segments; decide: keep segment-level `speaker` as the source of truth and expose a convenience `speakers` map; both optional defaults so existing serialization is unchanged.
+- **Dependencies:** P0-1 (nothing code-wise, but review integration in P0-4 consumes it).
+- **Acceptance criteria:**
+  - `TranscriptSegment(speaker="Speaker 1")` constructs; default `speaker=None` for untouched callers (no test/API regression).
+  - A transcript built from segments with `speaker` set round-trips through `TranscriptionResult` and `LiveTranscriptResponse.model_dump(mode="json")` unchanged otherwise.
+  - Existing tests (`test_transcription.py`, `test_live_transcription.py`) stay green with the default `None`.
 
-**Interface:**
-```python
-@dataclass
-class LLMValidationResult:
-    confirmed_matches: list[PHIMatch]        # Regex matches confirmed by LLM
-    false_positives: list[PHIMatch]          # Regex matches rejected by LLM
-    new_matches: list[PHIMatch]              # PHI found by LLM, missed by regex
-    confidence_scores: dict[str, float]      # Per-match confidence
-    llm_analysis: str                        # Raw LLM response for audit
+### P0-3 — Local faster-whisper STT backend behind `TRANSCRIPTION_BACKEND`
+- **Module:** new `src/meeting_notes_ai/services/local_transcription.py` (+ `TranscriptionService` parity) and `src/meeting_notes_ai/config.py`.
+- **Expected behavior:** With `TRANSCRIPTION_BACKEND=local`, transcription is served by faster-whisper locally; with `openai` (default), behavior is unchanged. Same `transcribe(audio_bytes, filename, language)` signature and `TranscriptionResult` return.
+- **Interface:**
+  - `config.py:16` — add `transcription_backend: str = os.getenv("TRANSCRIPTION_BACKEND", "openai")` and `local_whisper_model: str = os.getenv("LOCAL_WHISPER_MODEL", "small")` (or reuse `WHISPER_MODEL=local:<model>` encoding — pick one, document it).
+  - `services/local_transcription.py` — `class LocalWhisperTranscriptionService` with `async def transcribe(self, audio_bytes, filename, language=None) -> TranscriptionResult`; wraps faster-whisper `WhisperModel(model, compute_type="int8")`; WAV assumed; maps segments (with `speaker` reserved for P1).
+  - Wiring: `routes/live_transcription.py::get_live_service` (`:55-70`) and `routes/meetings.py::_build_services` (`:24-27`) construct the right backend from `settings.transcription_backend`.
+  - `show_download_progress`/caching: keep model download on first use (faster-whisper handles caching to disk).
+  - Add `faster-whisper` to `pyproject.toml` `dependencies` as optional (comment: local tier; keep default install light) or a conditional extra — **must be pinned, not just pip-installed** (repo convention).
+- **Dependencies:** P0-2 (return shape already carries segments; speaker comes in P1).
+- **Acceptance criteria:**
+  - `TRANSCRIPTION_BACKEND=openai` keeps the exact existing behavior (regression-clean).
+  - `TRANSCRIPTION_BACKEND=local` yields a `TranscriptionResult` with `text`/`language`/`duration_seconds`/`segments` from a fake faster-whisper (injectable/duck-typed — pre-tester supplies `_FakeLocalWhisper`).
+  - Both backends share the same `transcribe` signature; no caller in `live_transcription.py` / `transcribe_file` changes shape.
+  - Deps pinned in `pyproject.toml`; tests run via `.venv`.
 
-class LLMValidator:
-    def __init__(self, extraction_service: ExtractionService, config: HIPAAConfig): ...
-    async def validate(self, original_text: str, regex_matches: list[PHIMatch]) -> LLMValidationResult: ...
-    async def suggest_redactions(self, text: str) -> list[PHIMatch]: ...
-```
-
-**Prompt Design:**
-The LLM receives the transcript with regex-identified PHI callouts and asks it to confirm/correct each, plus flag any missed PHI.
-
-**Dependencies:** ExtractionService (existing), PHIRedactor (T1), HIPAAConfig
-
-**Acceptance Criteria:**
-- [ ] LLM validator correctly identifies a false positive (e.g., "10/10/2020" flagged as DOB but is a meeting date)
-- [ ] LLM validator catches a missed PHI (e.g., context: "the mayor of Springfield" → identify as location + title → PHI risk)
-- [ ] Returns confidence scores per match
-- [ ] Graceful degradation when LLM API is unavailable (falls through to regex-only)
-- [ ] Configurable toggle in HIPAAConfig
-- [ ] Async implementation matching existing codebase patterns
-
----
-
-#### T3. Append-Only Audit Logging
-
-**Module:** `src/meeting_notes_ai/hipaa/audit_logger.py`
-**Expected Behavior:**
-- Append-only JSONL file writer (no overwrite, no delete, no update)
-- Each entry: `{"timestamp": "<ISO8601>", "actor": "<user_id>", "action": "<action>", "resource": "<resource_type>:<id>", "phi_classification": "high|medium|none", "details": {}, "outcome": "success|failure"}`
-- Automatic log rotation (daily or 100MB, 6-year retention via config)
-- FastAPI dependency `get_audit_logger` for route injection
-- Thread-safe async file writes via `aiofile` or stdlib `asyncio.Lock`
-- HIPAA-required fields: timestamp, user ID, action description, resource ID, IP/device info, outcome
-
-**Interface:**
-```python
-@dataclass
-class AuditEntry:
-    timestamp: str
-    actor: str
-    action: str                      # e.g., "phi.scan", "phi.redact", "encryption.key_generate"
-    resource: str                    # e.g., "meeting:<uuid>", "patient:<id>"
-    phi_classification: str          # "high", "medium", "low", "none"
-    details: dict = field(default_factory=dict)
-    outcome: str = "success"
-    ip_address: str = ""
-    user_agent: str = ""
-
-class AuditLogger:
-    def __init__(self, config: HIPAAConfig): ...
-    async def log(self, entry: AuditEntry) -> None: ...
-    async def query(self, filters: dict, limit: int = 100) -> list[AuditEntry]: ...
-    async def get_stats(self, since: str = None) -> dict: ...
-    async def rotate(self) -> Path: ...     # Force manual rotation
-    async def export_range(self, start: str, end: str) -> Path: ...  # Export date range
-```
-
-**API Endpoints:**
-- `GET /api/v1/hipaa/audit-log` — Query audit log (paginated, filterable by actor/action/resource/date range)
-- `GET /api/v1/hipaa/audit-log/stats` — Summary statistics (count by action, by day, by PHI level)
-
-**Dependencies:** HIPAAConfig
-
-**Acceptance Criteria:**
-- [ ] Writing 1000 entries sequentially all succeed
-- [ ] File is valid JSONL (each line is valid JSON, parseable with `ijson` or line-by-line)
-- [ ] Concurrent writes from multiple coroutines do not corrupt the file
-- [ ] Log rotation creates timestamped archive files
-- [ ] Query with date range filter returns correct subset
-- [ ] Query with actor filter returns correct subset
-- [ ] HIPAA mandatory fields are always populated (validation on write)
-- [ ] Stale log files older than `retention_days` are marked for cleanup
+### P0-4 — Route finalized in-person meeting into the review workspace
+- **Module:** backend `src/meeting_notes_ai/services/live_transcription.py` (`finalize`/`transcribe_file`/`_persist_meeting`) + `src/meeting_notes_ai/routes/live_transcription.py` + frontend `frontend/src/live/LiveTranscriptionView.tsx` (finalize → review navigation).
+- **Expected behavior:** A finalized in-person/live meeting ends up as a reviewable `MeetingDetail` (`workspace.py` shape) with evidence-linked summary/decisions/action items (acceptance #4), and the UI transitions from the finalize overlay into `ReviewWorkspace`.
+- **Interface:**
+  - `live_transcription.py:378-422` `_persist_meeting` — currently writes transcript + summary (`metadata_json`) + action_items/decisions/key_points. **Add evidence persistence** so the meeting detail returns `evidence` with `speaker`/`timestamp`/`confidence` (schema matches `workspace.py:236-239`).
+  - Thread meeting `mode`/`hipaa` through `finalize` (`:230-279`, currently `mode="general"` at `:253/259`) and `transcribe_file` (`:281-328`) so Healthcare/Legal review flags and policy hold.
+  - `LiveTranscriptionView.tsx` — after `status === 'finalized'` (`:153-155`), navigate to review (either lift `meetingId`/result to `App.tsx` `setResult`, or add an `onOpenReview(result)` prop). Keep the finalize overlay as the transition point.
+- **Dependencies:** P0-2 (speaker in evidence), P0-3 (backend parity).
+- **Acceptance criteria:**
+  - Finalizing an in-person session yields a meeting retrievable via `GET /meetings/{id}` (`workspace.py:283`) with `summary` + `evidence[]` (each with speaker/timestamp/confidence).
+  - Healthcare/Legal mode persists `review_status="needs_review"` and does not route audio to OpenAI when `backend=local` (no-OpenAI assert, `workflow.py:21` policy).
+  - UI navigates finalize → `ReviewWorkspace` with title/summary/decisions/action items.
+  - **Pre-tester `test_review_integration.py`:** a fake-backed finalized session produces a ReviewWorkspace-shaped detail via `workflow.py`/`extraction.py` with evidence-linked summary/decisions/action items.
 
 ---
 
-#### T4. AES-256 Encryption at Rest with Per-Tenant Keys
+### P1-1 — Speaker diarization (pyannote.audio 3.1, self-hosted)
+- **Module:** new `src/meeting_notes_ai/services/diarization.py`; integration in `local_transcription.py` / `transcription.py` and `live_transcription.py::_persist_meeting`.
+- **Expected behavior:** After transcription, a diarization pass assigns a `speaker` to each `TranscriptSegment` via max-overlap alignment; labels surface in evidence and seed extraction `assignee`.
+- **Interface:**
+  - `diarization.py` — `class SpeakerDiarizer` with `async def diarize(self, audio_bytes, sample_rate) -> list[tuple[float,float,str]]` (start,end,speaker) or returns an aligner; handles mono downmix to 16 kHz; gates on HF token (`HF_TOKEN`) config; emits best-effort labels.
+  - Alignment helper: given Whisper segments `[start,end]` and diarization turns, assign each segment to the turn it overlaps most. Optional `gpt-4o-transcribe-diarize` path guarded by backend=openai.
+  - `local_transcription.py`/`transcription.py` — fill `TranscriptSegment.speaker` when diarization enabled (`DIARIZATION=1` env, default off for P0 parity).
+  - `extraction.py:65-94` — when speaker tags present, add speaker context to the prompt so `assignee` can be seeded from the speaker (`extraction.py:106-114`).
+- **Dependencies:** P0-2 (speaker field), P0-3 (local backend).
+- **Acceptance criteria:**
+  - Multi-speaker input yields segments with distinct `speaker` labels.
+  - Alignment assigns each segment to the single best-overlap diarization turn.
+  - No requirement on raw accuracy (best-effort per research risk §4); the review UI can correct labels.
+  - `DIARIZATION=0` (default) is byte-identical to P0 behavior.
+  - **Pre-tester `test_diarization.py`:** fake diarizer → transcript segments carry `speaker`; alignment correctness with overlapping timestamps.
 
-**Module:** `src/meeting_notes_ai/hipaa/encryption.py`
-**Expected Behavior:**
-- Envelope encryption model: Master Key Encryption Key (KEK) stored in `HIPAA_MASTER_KEY` env var
-- Per-tenant Data Encryption Key (DEK) generated on tenant provisioning
-- DEK encrypted with KEK before storage in `EncryptionKey` DB model
-- AES-256-GCM for authenticated encryption (integrity + confidentiality)
-- Two operation modes: `field_encrypt` (encrypt individual string fields) and `document_encrypt` (encrypt full JSON blobs)
-- Key rotation support: re-wrap DEKs with new KEK
+### P1-2 — Batch "record-then-transcribe" long-recording finalize
+- **Module:** `frontend/src/live/useLiveSession.ts` (finalize path) + `services/live_transcription.py` (batch path).
+- **Expected behavior:** For long in-person rooms, finalize sends the accumulated WebM once (`POST /upload` → `transcribe_file`) instead of re-transcribing per chunk, avoiding the O(n²) `ingest_chunk` loop (`live_transcription.py:208-209`).
+- **Interface:** `useLiveSession.ts::finalize` — add a "batch finalize" branch that, when the session is long (or a local flag), uploads the assembled blob to `POST /api/v1/meetings/live/upload` and interprets the `LiveTranscriptResponse`. Keep live partials for short/interactive sessions.
+- **Dependencies:** P0-4 (review routing after batch finalize).
+- **Acceptance criteria:**
+  - Batch finalize produces the same `LiveTranscriptResponse` shape as WS finalize.
+  - Long-room finalize does not re-transcribe accumulated audio N times.
+  - Validation (empty/415/413/rate-limit) preserved.
 
-**Interface:**
-```python
-class EncryptionService:
-    def __init__(self, config: HIPAAConfig, db_factory: Callable): ...
-
-    async def generate_tenant_key(self, tenant_id: str) -> str: ...   # Returns key fingerprint
-    async def encrypt_field(self, tenant_id: str, plaintext: str) -> str: ...   # Returns base64 ciphertext
-    async def decrypt_field(self, tenant_id: str, ciphertext: str) -> str: ...
-    async def encrypt_document(self, tenant_id: str, data: dict) -> dict: ...
-    async def decrypt_document(self, tenant_id: str, data: dict) -> dict: ...
-    async def rotate_master_key(self, new_kek: str) -> int: ...       # Re-wrap all DEKs, returns count
-    async def get_key_info(self, tenant_id: str) -> dict: ...         # Key metadata (no plaintext key ever returned)
-
-    # Internal
-    def _generate_dek(self) -> bytes: ...
-    def _wrap_key(self, dek: bytes, kek: bytes) -> str: ...
-    def _unwrap_key(self, wrapped_key: str, kek: bytes) -> bytes: ...
-    def _aes_encrypt(self, key: bytes, plaintext: str) -> str: ...
-    def _aes_decrypt(self, key: bytes, ciphertext: str) -> str: ...
-```
-
-**Data Model (DB addition — `meeting_notes_ai/db/models.py`):**
-```python
-class EncryptionKey(Base, TimestampMixin):
-    __tablename__ = "encryption_keys"
-    id: str = Column(String(36), primary_key=True, default=uuid4_str)
-    tenant_id: str = Column(String(100), unique=True, nullable=False, index=True)
-    wrapped_key: str = Column(Text, nullable=False)       # DEK encrypted with KEK (base64)
-    key_fingerprint: str = Column(String(64), nullable=False)  # SHA-256 of KEK version
-    algorithm: str = Column(String(20), default="AES-256-GCM")
-    is_active: bool = Column(Boolean, default=True)
-    rotated_at: DateTime = Column(DateTime(timezone=True), nullable=True)
-```
-
-**API Endpoints:**
-- `POST /api/v1/hipaa/encryption/keys` — Generate new tenant key (admin only)
-- `GET /api/v1/hipaa/encryption/keys/{tenant_id}` — Get key metadata
-- `POST /api/v1/hipaa/encryption/rotate` — Rotate master KEK (admin only)
-- `POST /api/v1/hipaa/encryption/encrypt` — Encrypt a field (internal use)
-- `POST /api/v1/hipaa/encryption/decrypt` — Decrypt a field (internal use, audit logged)
-
-**Dependencies:** HIPAAConfig, `cryptography` library, EncryptionKey DB model
-
-**Acceptance Criteria:**
-- [ ] `generate_tenant_key()` creates a unique DEK and stores it wrapped with the KEK
-- [ ] `encrypt_field()` + `decrypt_field()` round-trip produces original plaintext
-- [ ] AES-256-GCM nonces are unique per encryption (no nonce reuse)
-- [ ] Ciphertext is authenticated: tampered ciphertext raises `DecryptionError`
-- [ ] Two tenants with same plaintext produce different ciphertexts
-- [ ] Key rotation generates new KEK fingerprint, re-wraps all DEKs
-- [ ] Old DEKs remain decryptable until `is_active=False` (grace period)
-- [ ] No plaintext key material is ever exposed via API or logs
+### P1-3 — Privacy-tier affordance surfacing (local-only guarantees in UI)
+- **Module:** `frontend/src/workspace/MeetingSetup.tsx` (data-path aside) + config wiring.
+- **Expected behavior:** When backend=local and/or mode is Healthcare/Legal, the data-path panel (already claims "Encrypted processing / Zürich / EU", `MeetingSetup.tsx` data-path aside) explicitly states audio stays on the server/hardware; a local-backend badge.
+- **Interface:** read `TRANSCRIPTION_BACKEND`/mode to conditionally render a "Local processing, no third-party" line; do not overpromise if not enforced. Minimal copy change → keep it honest per research risk (§4).
+- **Dependencies:** P0-3.
+- **Acceptance criteria:** Copy reflects actual backend; no new claims when backend=openai.
 
 ---
 
-### P1 — Compliance Aids (Should Have)
-
-#### T5. BAA Template Generation & Management
-
-**Module:** `src/meeting_notes_ai/hipaa/baa.py`
-**Template:** `src/meeting_notes_ai/hipaa/templates/baa_template.md.jinja`
-
-**Expected Behavior:**
-- Generate a business associate agreement per HIPAA §164.504(e)
-- Fill template fields: covered entity name, business associate name, effective date, service description, termination clause
-- Store signed BAA agreements in DB
-- List/retrieve/regenerate BAA documents
-- Export as Markdown or PDF
-
-**Interface:**
-```python
-class BAAService:
-    def __init__(self, db_factory: Callable): ...
-
-    async def generate_template(self, org_name: str, ba_name: str, effective_date: str) -> str: ...  # Returns markdown
-    async def generate_pdf(self, agreement_id: str) -> bytes: ...         # Returns PDF bytes
-    async def store_agreement(self, org_name: str, ba_name: str, signed_by: str) -> str: ...  # Returns id
-    async def get_agreement(self, agreement_id: str) -> BAAgreement: ...
-    async def list_agreements(self) -> list[BAAgreementSummary]: ...
-```
-
-**Data Models (DB additions):**
-```python
-class BAATemplate(Base, TimestampMixin):
-    __tablename__ = "baa_templates"
-    id: str = Column(String(36), primary_key=True, default=uuid4_str)
-    version: str = Column(String(10), nullable=False)
-    content: str = Column(Text, nullable=False)        # Markdown template body
-    is_active: bool = Column(Boolean, default=True)
-
-class BAAgreement(Base, TimestampMixin):
-    __tablename__ = "baa_agreements"
-    id: str = Column(String(36), primary_key=True, default=uuid4_str)
-    org_name: str = Column(String(200), nullable=False)
-    ba_name: str = Column(String(200), nullable=False)
-    effective_date: str = Column(String(20), nullable=False)
-    signed_by: str = Column(String(100), nullable=False)
-    content_md: str = Column(Text, nullable=False)     # Rendered markdown
-    status: str = Column(String(20), default="active") # active, expired, terminated
-```
-
-**API Endpoints:**
-- `POST /api/v1/hipaa/baa/generate` — Generate BAA from template (body: org_name, ba_name, effective_date)
-- `GET /api/v1/hipaa/baa/{agreement_id}` — Get agreement details
-- `GET /api/v1/hipaa/baa/{agreement_id}/export?format=pdf|markdown` — Download agreement
-- `GET /api/v1/hipaa/baa` — List all agreements
-
-**Dependencies:** Jinja2, HIPAAConfig, BAAgreement DB model
-
-**Acceptance Criteria:**
-- [ ] BAA template includes all HIPAA §164.504(e) required clauses
-- [ ] Template substitution correctly fills org_name, ba_name, effective_date
-- [ ] PDF export produces valid PDF with proper formatting
-- [ ] Signed agreements are stored immutably (no UPDATE after signed)
-- [ ] Agreement listing returns paginated results
+### P2 (deferred / nice-to-have)
+- **P2-1 — Dedicated long-recording streaming upload endpoint** (`POST /meetings/in-person/{id}/audio`, chunk-append to object storage). Only if 25 MB cap (`config.py:17-19`) becomes a real hardship. Depends on storage D2.
+- **P2-2 — AudioWorklet/PCM capture path** for browsers that can't emit WebM/Opus or that want raw PCM (research §3: Safari mp4 preference). Server already supports PCM (`_pcm16_to_wav`, `live_transcription.py:88-114`). High effort, low P0 value.
+- **P2-3 — Speaker-label correction UI in ReviewWorkspace** (research §4 best-effort mitigation). Requires diarization (P1-1).
+- **P2-4 — Consent-state persistence** for `Record in person` mirroring the regulated checkbox (`MeetingSetup.tsx` regulated-fields) into `ConsentStatus` (`models.py:107-111`).
 
 ---
 
-#### T6. Compliance Dashboard API & HTML
-
-**Module:** `src/meeting_notes_ai/hipaa/dashboard.py`
-**Template:** `src/meeting_notes_ai/hipaa/templates/dashboard.html.jinja`
-
-**Expected Behavior:**
-- REST API returns compliance metrics aggregated from audit log + encryption + BAA status
-- Summary endpoint: total PHI scans, redactions performed, active keys, BAA agreements, audit entries in last 30 days
-- PHI stats endpoint: matches by category (pie chart data), by risk level, by day (time series)
-- Recent activity endpoint: last 50 audit entries
-- Simple HTML dashboard page rendering Chart.js visualizations
-
-**Interface:**
-```python
-class ComplianceService:
-    def __init__(self, audit_logger: AuditLogger, encryption_service: EncryptionService,
-                 baa_service: BAAService, phi_redactor: PHIRedactor): ...
-
-    async def get_summary(self) -> ComplianceSummary: ...
-    async def get_phi_stats(self, since: str = "30d") -> PHIStats: ...
-    async def get_recent_activity(self, limit: int = 50) -> list[AuditEntry]: ...
-    async def get_encryption_status(self) -> dict: ...
-    async def get_baa_compliance(self) -> dict: ...
-
-@dataclass
-class ComplianceSummary:
-    total_phi_scans: int
-    total_redactions: int
-    active_encryption_keys: int
-    active_baa_agreements: int
-    audit_entries_30d: int
-    overall_compliance_score: float   # 0.0 - 1.0
-    last_audit_entry: str | None
-    encryption_health: str            # "healthy", "degraded", "unhealthy"
-
-@dataclass
-class PHIStats:
-    by_category: dict[str, int]       # {"name": 42, "ssn": 7, "dob": 15, ...}
-    by_risk_level: dict[str, int]     # {"high": 50, "medium": 30, "low": 20}
-    by_date: dict[str, int]           # Time series {"2026-07-01": 12, ...}
-    total_false_positives: int
-    total_llm_corrections: int
-```
-
-**API Endpoints:**
-- `GET /api/v1/hipaa/compliance/summary` — Compliance summary metrics
-- `GET /api/v1/hipaa/compliance/phi-stats` — PHI statistics (accepts `since` query param)
-- `GET /api/v1/hipaa/compliance/activity` — Recent audit entries
-- `GET /api/v1/hipaa/compliance` — HTML dashboard page
-
-**Dependencies:** AuditLogger (T3), EncryptionService (T4), BAAService (T5), PHIRedactor (T1)
-
-**Acceptance Criteria:**
-- [ ] Summary endpoint returns all fields with correct aggregations
-- [ ] PHI stats by_category matches actual pattern scan totals from audit log
-- [ ] Dashboard HTML page loads without errors (no broken JS or CSS)
-- [ ] Chart.js renders at least one chart (pie or bar)
-- [ ] Activity endpoint returns most recent entries with correct ordering
-- [ ] Empty-state handling when no data exists yet
-
----
-
-### P2 — Docs & Polish (Nice to Have)
-
-#### T7. HIPAA Mode Documentation
-
-**Module:** `docs/HIPAA_MODE.md`
-**Expected Behavior:**
-- Comprehensive documentation covering: PHI redaction setup, audit logging, encryption configuration, BAA lifecycle, compliance dashboard
-- Step-by-step configuration guide for new tenants
-- Security best practices section
-- HIPAA compliance checklist
-
-**Acceptance Criteria:**
-- [ ] All 5 feature areas documented with code examples
-- [ ] Configuration reference (environment variables, JSON schemas)
-- [ ] Troubleshooting section for common issues
-
-#### T8. Version Bump & Changelog
-
-**Module:** `src/meeting_notes_ai/__init__.py`, `CHANGELOG.md`
-**Expected Behavior:**
-- Bump version to `0.4.0`
-- Update CHANGELOG with all HIPAA features
-
-**Acceptance Criteria:**
-- [ ] Version string updated
-- [ ] CHANGELOG entries for all new features
-
-#### T9. Thread-safe Crypto Context Cleanup
-
-**Module:** `src/meeting_notes_ai/hipaa/encryption.py`
-**Expected Behavior:**
-- Ensure `cryptography` Fernet/AES contexts are not reused across coroutines without reinitialization
-- Add warning log when KEK env var is missing at startup
-- Graceful degradation: without KEK, encryption defaults to "not enabled" mode
-
----
-
-## 6. Dependency Graph
+## 5. Dependency Graph
 
 ```
-                          ┌──────────────────┐
-                          │  HIPAAConfig      │ (shared infra)
-                          │  (config.py)      │
-                          └────────┬─────────┘
-                                   │
-            ┌──────────────────────┼──────────────────────┐
-            ▼                      ▼                      ▼
-   ┌────────────────┐    ┌──────────────────┐    ┌──────────────────┐
-   │ PHIRedactor    │    │ AuditLogger      │    │ EncryptionService│
-   │ (phi_patterns, │    │ (audit_logger.py)│    │ (encryption.py)  │
-   │  redactor.py)  │    └────────┬─────────┘    └────────┬─────────┘
-   └────────┬───────┘             │                       │
-            │                     │                       │
-            ▼                     ▼                       │
-   ┌────────────────┐    ┌──────────────────┐            │
-   │ LLMValidator   │◄───│ Audit entries    │            │
-   │ (llm_validator)│    │ from all modules │            │
-   └────────┬───────┘    └──────────────────┘            │
-            │                                            │
-            ▼                                            ▼
-   ┌────────────────┐    ┌──────────────────┐   ┌──────────────────┐
-   │ ComplianceSvc  │◄───│ All 3 P0 modules  │◄──│ BAA Service      │
-   │ (dashboard.py) │    │ (aggregation)     │   │ (baa.py)         │
-   └────────────────┘    └──────────────────┘   └──────────────────┘
+P0-1 (frontend card)            [no deps]
+P0-2 (speaker model)            [no deps]
+P0-3 (local STT)                <- P0-2 (return shape)
+P0-4 (review routing+evidence)  <- P0-2, P0-3
+P1-1 (diarization)              <- P0-2, P0-3
+P1-2 (batch finalize)           <- P0-4
+P1-3 (privacy affordance)       <- P0-3
+P2-*                             <- various (deferred)
 ```
 
-**Build order:**
-1. HIPAAConfig (shared infra)
-2. PHIRedactor + phi_patterns.json (T1)
-3. AuditLogger (T3)
-4. EncryptionService (T4) — needs config + db model
-5. LLMValidator (T2) — needs PHIRedactor
-6. BAAService (T5) — needs config + db model
-7. ComplianceService (T6) — needs T1, T3, T4, T5
+**P0 sequencing for dev:** P0-1 (smallest, unblocks demo) → P0-2 (data shape) → P0-3 (local STT) → P0-4 (review integration). P0-2 and P0-3 can be developed in parallel once P0-1 lands; P0-4 is the capstone that satisfies acceptance #2/#4/#5.
 
 ---
 
-## 7. Risk Assessment
+## 6. Cross-cutting notes for the pre-tester (t_32acfe3d)
 
-| Risk | Impact | Likelihood | Mitigation |
-|------|--------|-----------|------------|
-| KEK stored in env var compromises security model | High | Low | Document that env is for v1; upgrade path to AWS KMS/HashiCorp Vault documented |
-| LLM validation adds latency to PHI processing | Medium | Medium | Configurable toggle; timeout + fallback to regex-only; async parallel execution |
-| JSONL audit log performance under heavy write load | Medium | Low | Write batching (flush every 100ms or 50 entries); separate file per day |
-| Encryption key loss = data loss | Critical | Low | KEK backup must be documented; add `HIPAA_MASTER_KEY_BACKUP` env var support |
-| PHI regex false negatives in unstructured medical text | Medium | Medium | LLM validation pass catches regex misses; documented limitation |
-| Concurrent test DB state contamination | Medium | Low | Use pytest fixtures with isolated test DB per test module |
+The pre-tester writes the 4 test files listed in their task body. Key seams and conventions to reuse (all grounded):
+
+1. **Seam pattern:** `tests/test_live_ui.py:25-50` — duck-typed `_FakeTranscription` / `_FakeExtraction`. For ambient recording, add a `_FakeLocalWhisper` (local STT) and a `_FakeDiarizer`. Inject via `app.dependency_overrides[get_live_service]` (`test_live_ui.py:159`).
+2. **Endpoint under test:** `POST /api/v1/meetings/live/upload` (`routes/live_transcription.py:215-244`) for ambient recording + batch transcription; `POST /api/v1/meetings/live/start` for happy-path persist. Validation to assert: empty→400, wrong content-type→415, too-large→413, rate-limit→429.
+3. **Review integration:** assert via `workflow.py::resolve_processing_policy` + `_persist_meeting` shape → `GET /meetings/{id}` (`workspace.py:283`) returns `summary` + `evidence[]` with `speaker`/`timestamp`/`confidence`.
+4. **Interface tests** (pass immediately): `TranscriptSegment.speaker` default `None`; `LocalWhisperTranscriptionService.transcribe` signature; `TRANSCRIPTION_BACKEND` config; route registration (like `test_live_ui.py:66-84`).
+5. **Behavioral tests** (RED while feature missing): local backend returns a real `TranscriptionResult`; diarized segments carry `speaker`; finalize persists evidence-backed review detail; review route persists status.
+6. **NO frontend JS test framework exists** (`frontend/package.json:7-23`). Do not add one. Validate the MeetingSetup card via backend UI-glue (`/app/live` route, CSP/Permissions-Policy, `test_live_ui.py:255-277`) + negative availability; leave real browser capture to the tester's Playwright/E2E smoke.
+7. Always run via `.venv/bin/python -m pytest` / `-m ruff`; pin any new runtime dep (faster-whisper, pyannote/pyannote-audio if diarization tests need import) in `pyproject.toml`, not just `.venv`.
 
 ---
 
-## 8. Acceptance Criteria (Cross-Cutting)
+## 7. Acceptance Criteria Matrix (feature-level → task-level)
 
-- [ ] All P0 tasks have ≥90% test coverage (interface + behavioral + edge cases)
-- [ ] All tests pass: `uv run pytest -q` — zero regressions from existing 341 passing tests
-- [ ] Ruff lint clean: `uv run ruff check src/ tests/` — zero new errors
-- [ ] New DB models have Alembic migration scripts or documented auto-create path
-- [ ] All new API endpoints follow existing patterns: `prefix="/api/v1/..."`, proper status codes, auth where appropriate
-- [ ] Healthcare mode toggle: existing `MeetingMode.HEALTHCARE` continues to work; new HIPAA features are additive
-- [ ] Hot-reloadable PHI patterns file without app restart
-- [ ] No plaintext secrets in logs, error messages, or API responses
-- [ ] All async operations have timeout handling (default 30s)
-- [ ] README updated with HIPAA mode configuration instructions
+| Feature AC (task body) | Satisfied by |
+|---|---|
+| 1. Device mic capture via "Record in person" card | P0-1 (+ existing `useLiveSession.ts`) |
+| 2. Batch transcription via existing Whisper integration | P0-3 (local/API parity), P0-4 (persist) |
+| 3. Speaker diarization | P1-1 (+ P0-2 model) |
+| 4. Review integration (evidence-linked summary/decisions/actions) | P0-4 |
+| 5. Privacy-first (local or own API key, no bot) | P0-3 (backend switch), P0-4 (mode/openai assert), P1-3 (UI affordance) |
+| 6. UI state: preview→active, status+duration, → review | P0-1 (active), existing `LiveStatus` (status/duration), P0-4 (→ review) |
+| 7. Error handling (mic denied, too short, Whisper API, network) | P0-1/P0-3/P0-4 + existing error paths (`useLiveSession.ts:187`, `routes/live_transcription.py:225-243`) |
+| 8. TDD tests (start/stop, transcription, diarization, review) | Pre-tester t_32acfe3d (4 files) |
+
+---
+
+*End of brief. Grounded entirely in `/home/zoltan/meeting-notes-ai` code (file:line cited inline) and `analysis/research-brief.md`.*
