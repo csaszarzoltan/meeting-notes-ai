@@ -72,3 +72,11 @@ cd frontend && npm run typecheck && npm run build
 ```
 
 See `TEST_RESULTS.md`, `review-findings.md`, `FEATURES-DONE.md`, and `docs/WORKSPACE_API.md` for verified details. The source archive intentionally excludes `frontend/dist`; the documented build creates it reproducibly.
+
+## Dokumentáció
+
+- [Engineering Standards](docs/engineering-standards.md) — kötelező olvasmány kódírás előtt
+- [Döntések / tanulságok](docs/decisions/) — javított hibák és anti-minták
+- [Specifikációk](docs/specs/) — feature-ök kanonikus követelményei
+
+- [Módszertan](docs/METHODOLOGY.md) — a lab fejlesztési módszertana (kötelező olvasmány)
