@@ -110,4 +110,3 @@ The worker claims pending deletion jobs, skips terminal artifact results after r
 Version 1.6.0 completes the central claim-review interaction: users can edit claim text, select transcript segments, add or remove evidence, approve or reject each claim, map speakers, see `Reapproval required`, publish immutable snapshots, and resolve optimistic-concurrency conflicts with `Keep current`, `Use mine as new revision`, or `Cancel`.
 
 Published snapshots and snapshot-backed shares are registered in the artifact registry for team meetings. Strict healthcare and legal meetings continue to fail closed when no eligible snapshot exists.
->>>>>>> e181cbe070d9f8d035112a414a1fde99526bfb68
