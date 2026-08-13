@@ -137,3 +137,13 @@
     width: 100%;
   }
 }
+
+/* Trusted meeting record */
+.trusted-tabs{display:flex;gap:.5rem;margin:1rem 0;border-bottom:1px solid var(--border,#d9e0ea)}
+.trusted-tabs button{min-height:44px;padding:.65rem 1rem;border:0;background:transparent;color:inherit}
+.trusted-tabs button.active{font-weight:700;border-bottom:3px solid var(--accent,#5b6cf9)}
+.trusted-panel{display:grid;gap:1rem;max-width:760px;padding:1.5rem;border:1px solid var(--border,#d9e0ea);border-radius:16px;background:var(--surface,#fff)}
+.trusted-panel label{display:flex;gap:.75rem;align-items:center;min-height:44px}
+.trusted-panel input{width:20px;height:20px}
+@media(max-width:767px){.trusted-tabs{overflow-x:auto}.trusted-tabs button{white-space:nowrap}.trusted-panel{padding:1rem}}
+@media(prefers-reduced-motion:reduce){.trusted-panel,.trusted-tabs *{transition:none!important;animation:none!important}}

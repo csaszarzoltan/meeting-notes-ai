@@ -7,7 +7,7 @@ BatchFileResult, WebhookSubscription, BAATemplate, BAAgreement
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum as PyEnum
 from typing import Optional
 
@@ -197,15 +197,9 @@ class Meeting(Base, TimestampMixin):
     decisions: Mapped[str] = mapped_column(Text, nullable=True)  # JSON
     key_points: Mapped[str] = mapped_column(Text, nullable=True)  # JSON
     metadata_json: Mapped[str] = mapped_column(Text, nullable=True)  # JSON
-    google_calendar_event_id: Mapped[Optional[str]] = mapped_column(
-        String(255), nullable=True
-    )
-    google_calendar_id: Mapped[Optional[str]] = mapped_column(
-        String(255), nullable=True
-    )
-    source: Mapped[str] = mapped_column(
-        String(50), nullable=False, default="upload"
-    )
+    google_calendar_event_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    google_calendar_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    source: Mapped[str] = mapped_column(String(50), nullable=False, default="upload")
 
     # Relationships
     user: Mapped["User"] = relationship(back_populates="meetings")
@@ -398,9 +392,7 @@ class GoogleCalendarToken(Base, TimestampMixin):
 
     __tablename__ = "google_calendar_tokens"
 
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
-    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("users.id"), unique=True, nullable=False, index=True
     )
@@ -410,9 +402,7 @@ class GoogleCalendarToken(Base, TimestampMixin):
         DateTime(timezone=True), nullable=True
     )
     scope: Mapped[str] = mapped_column(String(500), nullable=False, default="")
-    calendar_id: Mapped[str] = mapped_column(
-        String(255), nullable=False, default="primary"
-    )
+    calendar_id: Mapped[str] = mapped_column(String(255), nullable=False, default="primary")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     disconnected_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -430,18 +420,10 @@ class OAuthState(Base, TimestampMixin):
 
     __tablename__ = "oauth_states"
 
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
-    )
-    state_token: Mapped[str] = mapped_column(
-        String(100), unique=True, nullable=False, index=True
-    )
-    user_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("users.id"), nullable=False
-    )
-    expires_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    state_token: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     used: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
 
@@ -461,22 +443,16 @@ class PMIntegrationToken(Base, TimestampMixin):
 
     __tablename__ = "pm_integration_tokens"
     __table_args__ = (
-        UniqueConstraint(
-            "user_id", "provider", name="uq_pm_integration_tokens_user_provider"
-        ),
+        UniqueConstraint("user_id", "provider", name="uq_pm_integration_tokens_user_provider"),
     )
 
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
-    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("users.id"), nullable=False, index=True
     )
     provider: Mapped[str] = mapped_column(String(50), nullable=False)
     encrypted_credentials: Mapped[str] = mapped_column(Text, nullable=False)
-    account_email: Mapped[str] = mapped_column(
-        String(255), nullable=False, default=""
-    )
+    account_email: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     account_url: Mapped[str] = mapped_column(String(500), nullable=False, default="")
     token_expires_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -485,3 +461,101 @@ class PMIntegrationToken(Base, TimestampMixin):
     disconnected_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+
+# Trusted meeting-record models (v1.4.0)
+class TranscriptSegment(Base, TimestampMixin):
+    __tablename__ = "transcript_segments"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    meeting_id: Mapped[str] = mapped_column(ForeignKey("meetings.id"), index=True)
+    ordinal: Mapped[int] = mapped_column(Integer)
+    start_ms: Mapped[int] = mapped_column(Integer)
+    end_ms: Mapped[int] = mapped_column(Integer)
+    raw_speaker_label: Mapped[str] = mapped_column(String(120), default="")
+    speaker_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    text: Mapped[str] = mapped_column(Text, default="")
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+
+
+class Claim(Base, TimestampMixin):
+    __tablename__ = "claims"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    meeting_id: Mapped[str] = mapped_column(ForeignKey("meetings.id"), index=True)
+    claim_type: Mapped[str] = mapped_column(String(32))
+    text: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(32), default="draft")
+    version: Mapped[int] = mapped_column(Integer, default=1)
+
+
+class ClaimEvidence(Base, TimestampMixin):
+    __tablename__ = "claim_evidence"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    claim_id: Mapped[str] = mapped_column(ForeignKey("claims.id"), index=True)
+    segment_id: Mapped[str] = mapped_column(ForeignKey("transcript_segments.id"), index=True)
+    start_ms: Mapped[int] = mapped_column(Integer)
+    end_ms: Mapped[int] = mapped_column(Integer)
+    ordinal: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class PolicyVersion(Base, TimestampMixin):
+    __tablename__ = "policy_versions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    team_id: Mapped[str] = mapped_column(ForeignKey("teams.id"), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    approval_json: Mapped[str] = mapped_column(Text, default="{}")
+    provider_json: Mapped[str] = mapped_column(Text, default="{}")
+    storage_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_by: Mapped[str] = mapped_column(String(36))
+    activated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+
+class Artifact(Base, TimestampMixin):
+    __tablename__ = "artifacts"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    team_id: Mapped[str] = mapped_column(ForeignKey("teams.id"), index=True)
+    meeting_id: Mapped[str] = mapped_column(ForeignKey("meetings.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(40))
+    location_class: Mapped[str] = mapped_column(String(32))
+    location_ref_encrypted: Mapped[str] = mapped_column(Text, default="")
+    source_key: Mapped[str] = mapped_column(String(255), unique=True)
+    content_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    retention_state: Mapped[str] = mapped_column(String(32), default="active")
+    policy_version_id: Mapped[str | None] = mapped_column(
+        ForeignKey("policy_versions.id"), nullable=True
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ArtifactEdge(Base, TimestampMixin):
+    __tablename__ = "artifact_edges"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    parent_id: Mapped[str] = mapped_column(ForeignKey("artifacts.id"), index=True)
+    child_id: Mapped[str] = mapped_column(ForeignKey("artifacts.id"), index=True)
+    relation_type: Mapped[str] = mapped_column(String(32))
+
+
+class DeletionJob(Base, TimestampMixin):
+    __tablename__ = "deletion_jobs"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    meeting_id: Mapped[str] = mapped_column(ForeignKey("meetings.id"), index=True)
+    status: Mapped[str] = mapped_column(String(32), default="pending")
+    requested_by: Mapped[str] = mapped_column(String(36))
+    policy_version_id: Mapped[str | None] = mapped_column(
+        ForeignKey("policy_versions.id"), nullable=True
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class AuditChainEvent(Base, TimestampMixin):
+    __tablename__ = "audit_chain_events"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    team_id: Mapped[str] = mapped_column(String(36), index=True)
+    actor_id: Mapped[str] = mapped_column(String(36))
+    event_type: Mapped[str] = mapped_column(String(80))
+    payload_sha256: Mapped[str] = mapped_column(String(64))
+    previous_hash: Mapped[str] = mapped_column(String(64), default="0" * 64)
+    event_hash: Mapped[str] = mapped_column(String(64), unique=True)

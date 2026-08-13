@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.4.0] — 2026-08-13
+
+### Added
+- Evidence-grounding validation, atomic speaker mappings, and fail-closed review policy rules.
+- Tenant-scoped artifact lineage, deletion outcome classification, and signed audit-chain exports.
+- Trusted-record SQLAlchemy models and additive Alembic migration.
+- Compliance Center audit and data-policy navigation.
+
+### Tests
+- 18 BDD-derived tests covering US-001, US-002, US-003, US-007, US-008, and US-009.
+
+
 All notable changes to MeetingNotesAI are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),

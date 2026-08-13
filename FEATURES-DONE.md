@@ -1,16 +1,17 @@
+# Features Done
+
 ## Features Done (this pass)
-- Authenticated workspace boundary: every private workspace route now requires the existing JWT dependency
-- Tenant-isolated workspace persistence: meetings, reviews, actions, settings, integrations, compliance, batches, audits, and shares are scoped by authenticated user ID
-- Canonical meeting save: upload processing results are persisted before the review workspace opens
-- Review and approval provenance: autosave, approval, rejection, reviewer identity, immutable versions, and audit events persist through the authenticated API
-- Secure public sharing: approved meetings receive expiring random tokens with active-state checks, access auditing, and immediate revocation
-- Honest connector execution: configured adapters receive queued work without fabricated remote IDs or false synced status
-- Evidence-backed compliance: controls derive from current authenticated approval and retention settings
-- Real workspace search: Cmd/Ctrl+K queries private meeting title, summary, transcript, tags, and decisions and supports Arrow/Enter keyboard operation
-- Real review playback controls: desktop and mobile controls use the audio element and evidence navigation seeks to source timestamps
-- Authenticated product shell: AuthGate is mounted and the workspace client and upload processing requests send the session JWT
-- Honest capture availability: Google Calendar import is live (OAuth connect + one-click event import); in-person preview mode remains disabled until implemented
-- Review remediation tests: security, tenant isolation, full create-review-share-revoke integration, UI wiring, and real filesystem persistence are covered
+- Evidence-grounding rules: validates same-meeting timestamp spans and blocks unsupported claims.
+- Versioned speaker mapping: applies bounded atomic corrections and rejects stale revisions.
+- Review policy evaluation: fails closed for unsupported, rejected, stale, or under-approved claims.
+- Artifact lineage rules: returns tenant-scoped acyclic graphs with idempotent registration.
+- Deletion outcome classification: distinguishes internal deletion from external remediation.
+- Tamper-evident audit exports: validates canonical hash chains and creates HMAC-signed ZIP manifests.
+- Data-provider policy: blocks unapproved providers and pauses unavailable providers without fallback.
+- Compliance UI navigation: responsive Overview, Audit exports, and Data policies sections.
+
 ## Sources
-- research-findings.md items addressed: unified product workflow, source-linked review, review-before-share, tenant isolation, safe sharing, action execution, truthful compliance, global search
-- CHANGELOG.md section this maps to: [1.1.2] - 2026-08-05
+- research-findings.md items addressed: evidence-grounded review; speaker correction; artifact lineage; deletion receipts; tamper-evident audit; provider boundaries
+- implementation-plan.md requirements addressed: PR-A1, review-policy core of PR-A2, PR-B1 service rules, deletion classification in PR-B2, audit/provider policy core of PR-B3
+- user stories covered: US-001, US-002, US-003, US-007, US-008, US-009
+- CHANGELOG.md section this maps to: 1.4.0

@@ -7,7 +7,7 @@ packages = ["src/meeting_notes_ai"]
 
 [project]
 name = "meeting-notes-ai"
-version = "1.2.0"
+version = "1.4.0"
 description = "Micro-SaaS for meeting transcription and structured notes"
 requires-python = ">=3.11"
 dependencies = [
