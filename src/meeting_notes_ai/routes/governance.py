@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 import json
 import os
 from datetime import datetime, timezone
@@ -136,28 +134,11 @@ async def request_delete(
     )
     if active:
         return {"job_id": active.id, "status": active.status}
-    job = DeletionJob(meeting_id=meeting_id, status="processing", requested_by=uid(user))
+    job = DeletionJob(meeting_id=meeting_id, status="pending", requested_by=uid(user))
     db.add(job)
     await db.flush()
-    artifacts = (
-        (await db.execute(select(Artifact).where(Artifact.meeting_id == meeting_id)))
-        .scalars()
-        .all()
-    )
-    for a in reversed(artifacts):
-        outcome = (
-            "external_remediation_required"
-            if a.location_class == "external"
-            else ("already_absent" if a.deleted_at else "deleted")
-        )
-        if outcome == "deleted":
-            a.deleted_at = datetime.now(timezone.utc)
-            a.retention_state = "deleted"
-        db.add(DeletionResult(job_id=job.id, artifact_id=a.id, outcome=outcome))
-    for link in m.shared_links:
-        link.is_active = False
-    job.status = "completed"
-    job.completed_at = datetime.now(timezone.utc)
+    m.quarantined_at = datetime.now(timezone.utc)
+    m.quarantine_job_id = job.id
     return {"job_id": job.id, "status": job.status}
 
 
@@ -171,7 +152,9 @@ async def retry(
     if not job:
         raise HTTPException(404, "Deletion job not found")
     await meeting_access(db, job.meeting_id, user)
-    job.status = "completed"
+    from meeting_notes_ai.services.governance.jobs import run_deletion_job
+
+    job = await run_deletion_job(db, job.id)
     return {"job_id": job.id, "status": job.status}
 
 
@@ -205,14 +188,15 @@ async def deletion(
 async def receipt(
     job_id: str, user=Depends(get_current_user), db: AsyncSession = Depends(get_db_session)
 ):
-    data = await deletion(job_id, user, db)
-    key = os.getenv("AUDIT_EXPORT_SIGNING_KEY", "").encode()
-    if len(key) < 32:
-        raise HTTPException(503, "Receipt signing key unavailable")
-    body = {**data, "generated_at": datetime.now(timezone.utc).isoformat()}
-    raw = json.dumps(body, sort_keys=True, separators=(",", ":"))
-    body["signature"] = hmac.new(key, raw.encode(), hashlib.sha256).hexdigest()
-    return body
+    job = (
+        await db.execute(select(DeletionJob).where(DeletionJob.id == job_id))
+    ).scalar_one_or_none()
+    if not job:
+        raise HTTPException(404, "Deletion job not found")
+    await meeting_access(db, job.meeting_id, user)
+    if not job.receipt_json:
+        raise HTTPException(409, "Receipt is not ready")
+    return json.loads(job.receipt_json)
 
 
 @router.post("/audit/validate")

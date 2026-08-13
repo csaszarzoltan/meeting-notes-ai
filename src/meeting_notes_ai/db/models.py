@@ -88,6 +88,12 @@ class User(Base, TimestampMixin):
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
     display_name: Mapped[str] = mapped_column(String(100), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    snapshot_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("published_snapshots.id"), nullable=True
+    )
+    policy_version_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("policy_versions.id"), nullable=True
+    )
     tier: Mapped[str] = mapped_column(String(20), default="free", nullable=False)
 
     # Relationships
@@ -200,6 +206,10 @@ class Meeting(Base, TimestampMixin):
     google_calendar_event_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     google_calendar_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     source: Mapped[str] = mapped_column(String(50), nullable=False, default="upload")
+    quarantined_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    quarantine_job_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
 
     # Relationships
     user: Mapped["User"] = relationship(back_populates="meetings")
@@ -527,6 +537,8 @@ class Artifact(Base, TimestampMixin):
         ForeignKey("policy_versions.id"), nullable=True
     )
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[str] = mapped_column(String(24), default="active")
+    error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
 
 class ArtifactEdge(Base, TimestampMixin):
@@ -548,6 +560,8 @@ class DeletionJob(Base, TimestampMixin):
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     error_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    receipt_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class AuditChainEvent(Base, TimestampMixin):

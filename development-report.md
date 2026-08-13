@@ -1,37 +1,36 @@
 # Development Report
 
 ## Implemented Scope
-Completed the persistence and API integration layer for trusted meeting records and governance: canonical records, optimistic claim updates, speaker mappings, review decisions, immutable snapshots, activity, lineage, deletion jobs/results/receipts, audit validation/ZIP export, and versioned policy APIs. Completed the corrective governance schema and connected Compliance Center audit export and policy loading to real endpoints.
+Implemented snapshot-gated persistent sharing, schema support for snapshot-linked shares and quarantine, quarantine-first deletion requests, an idempotent deletion worker, canonical signed-receipt verification, and Activity/Data meeting views backed by trusted and governance APIs.
 
 ## Research Items Addressed
-Evidence-grounded trust, speaker attribution, approval before sensitive sharing, derivative-data visibility, honest external deletion state, tamper detection, and provider/data-boundary controls.
+Evidence-grounded sharing, immutable publication, derivative visibility, asynchronous deletion, honest external-remediation state, and verifiable deletion receipts.
 
 ## Plan Requirements Completed
-PR-1 through PR-5 have implementation foundations, persistence, APIs, schema, and selected tests. PR-6 remains blocked by 23 deterministic pre-existing regression failures reproduced before and after this pass. Share-route gating and every planned artifact registration hook remain partial.
+PR-3 snapshot gating and PR-5 quarantine/worker/receipt foundations are complete for the persistent database path. Activity and Data portions of PR-1/PR-2 are implemented. PR-4 comprehensive artifact hooks, PR-6 asynchronous audit jobs/editable policies, and PR-7 regression stabilization remain incomplete.
 
 ## User Stories Covered
-- US-001: AC1 PASS, AC2 PASS, AC3 PASS at validator/schema/API-contract level.
-- US-002: AC1 PASS, AC2 PASS, AC3 PASS at atomic rule/API-contract level.
-- US-003: AC1 PASS, AC2 PASS, AC3 PASS for policy/publish API; legacy share-route delegation PARTIAL.
-- US-007: lineage, deletion classification, idempotent job, status, retry, and signed receipt APIs PASS; broad derivative hooks PARTIAL.
-- US-008: mutation detection, empty export, key validation, persisted API and real ZIP PASS.
-- US-009: policy version contract and provider allow/block/pause rules PASS; all processing-hook preflights PARTIAL.
+- US-001: evidence rules remain PASS; complete trusted Review UI remains PARTIAL.
+- US-002: mapping rules remain PASS; Activity screen PASS; full speaker-mapping UI PARTIAL.
+- US-003: persistent strict share snapshot gate PASS; legacy JSON workspace share path PARTIAL.
+- US-007: quarantine request, worker, remediation outcomes, receipt mutation detection, and Data view PASS; all derivative hooks PARTIAL.
+- US-008: existing audit-chain tests PASS; asynchronous export jobs PARTIAL.
+- US-009: existing provider rules PASS; universal preflight hooks PARTIAL.
 
 ## Architecture Decisions
-Kept FastAPI, async SQLAlchemy/Alembic, React/TypeScript/Vite, and existing domain-rule modules. Added a corrective migration rather than rewriting the prior migration. Kept jobs database-backed and deterministic. Used HMAC-SHA256 and canonical JSON with no new backend runtime dependency. Tenant checks return 404 for inaccessible meetings/teams.
+Added a central `eligible_snapshot` service and kept compatibility behavior for general meetings. Added migration 0008 rather than rewriting migration history. Deletion requests now persist pending state and quarantine metadata; destructive work is isolated in `run_deletion_job`. Receipts use canonical JSON plus HMAC-SHA256 and `compare_digest`. Existing React/CSS conventions were retained.
 
 ## UI and UX Implementation
-Compliance Center now has functional Overview, Audit exports, and Data policies flows with real API calls, loading, validation, error, success, responsive, 44px-target, and reduced-motion behavior. Frontend type-check and production build passed. Full Review/Transcript/Activity/Data screen redesign and browser screenshots are blocked/incomplete; no claim of browser-inspected visual quality is made.
+Added Meeting Activity and Meeting Data components with loading, empty, warning, error/retry, exact-title confirmation, and job-state feedback. Integrated Activity/Data tabs into ReviewWorkspace. Frontend type-check and production build passed with 59 transformed modules. Browser screenshots, Playwright, and axe were not completed, so browser-inspected visual quality is not claimed.
 
 ## TDD Evidence
-Existing RED evidence from the preceding pass documented missing routes/persistence. New tests were added for complete ORM schema and request contracts, then run GREEN. Final selected command ran 29 tests: 29 passed, 0 failed. The existing 23 pure-domain BDD tests stayed green.
+RED gaps were the absence of snapshot gating, signed receipt mutation detection, and asynchronous deletion state. Added `test_us_003_share_policy.py` and `test_us_007_receipts.py`; final selected GREEN command ran 32 tests with 32 passed and 0 failed.
 
 ## Tests and Coverage
-- Selected final suite: 29 passed, 0 failed.
-- Collection: 1,396 tests.
-- Full regression: 1,366 passed, 23 failed, 7 xfailed/expected based on collection and progress; the same 23 failure groups documented in the input report remained: API-key fixture/auth behavior, batch mode threading, DB-session global state, diarization boundaries, Google Calendar status, review mode persistence, and local-transcription import isolation.
-- Coverage: 99% for evidence/review/governance rule modules, 138 statements and 2 missed. Route coverage was not measured to 90%; do not infer it.
-- Integration: real in-memory SQLite `Base.metadata.create_all`; real ZIP write/read; real Uvicorn startup and OpenAPI retrieval exposing 6 trusted and 9 governance paths.
+- Selected trusted/governance suite: 32 passed, 0 failed.
+- Coverage measured for newly introduced share-policy and receipt modules: 74% total (38 statements, 10 missed). `jobs.py` was not imported by the coverage run. The 90% target was not met and is reported as a blocker.
+- The prior input report established 1,396 collected tests and 23 repeatable pre-existing failures. A full-suite rerun was not completed in this time-bounded pass; no claim of regression green is made.
+- Integration: Uvicorn startup and `/healthz` returned 200 after installing already-declared Google dependencies into the verification environment.
 
 ## Lab Quality Gates
 - `tdd-gate-v3.sh`: BLOCKED, script not supplied.
@@ -41,38 +40,38 @@ Existing RED evidence from the preceding pass documented missing routes/persiste
 - `ui-gate.sh`: BLOCKED, script not supplied.
 
 ## Lint, Formatting, Type-Check, Build, and Startup Results
-- Ruff format check on changed Python scope: PASS, 6 files formatted.
-- Ruff lint on changed Python scope: PASS.
+- Changed-scope Ruff lint: PASS after six automatic fixes.
+- Changed-scope Ruff format check: PASS.
 - Python compileall: PASS.
 - Frontend type-check: PASS.
-- Frontend production build: PASS, 57 transformed modules.
-- Startup/OpenAPI integration: PASS; health/startup succeeded and OpenAPI contained 6 trusted plus 9 governance paths.
-- E2E/accessibility browser automation: BLOCKED, Playwright/axe tooling and screenshots were not completed.
+- Frontend build: PASS, 59 modules transformed.
+- Startup/health integration: PASS, HTTP 200, version 1.4.1 at verification time before version metadata was raised to 1.4.2.
+- E2E/accessibility/screenshots: BLOCKED, not implemented.
 
 ## Files Added
-Corrective migration; trusted-record and governance route modules; trusted/governance frontend API clients; schema/contract tests.
+Migration 0008; share policy service; governance jobs and receipts services; Activity and Data UI components; share-policy and receipt tests.
 
 ## Files Modified
-ORM models, main router wiring, Compliance Center, versions/lock files, README, CHANGELOG, trusted/governance docs, FEATURES-DONE, and this report.
+ORM models, persistent sharing route, governance route, ReviewWorkspace, CSS, version metadata, README, CHANGELOG, trusted/governance docs, FEATURES-DONE, and this report.
 
 ## Deferred or Blocked Items
-Legacy share-route policy delegation; comprehensive artifact hooks across export/share/webhook/PM paths; provider preflight at every outbound operation; full Review/Transcript/Activity/Data UI implementation; Playwright/axe tests and screenshots; 23 pre-existing regression failures; lab gates; Git push.
+Legacy JSON workspace share gating; all eight artifact hook integrations; provider preflight at transcription/extraction/storage; asynchronous audit-export worker; editable policy UI; complete claim/speaker Review UI; Playwright/axe/screenshots; 90% new-module coverage; full regression stabilization; lab gates; git push.
 
 ## Known Limitations
-Deletion execution is synchronous inside the request rather than a durable external worker. External artifacts are remediation-only. Audit/receipt HMAC verification requires a shared secret. Historical projection creates one coarse transcript segment when prior timestamps are unavailable. Several planned UI screens remain partial.
+Deletion worker has a deterministic service entrypoint but no long-running worker CLI in this pass. Retry endpoint performs the worker call synchronously. Receipt generation requires a 32-byte environment key. Activity/Data are integrated into the existing mobile-tab structure rather than a new route hierarchy.
 
 ## Integrity Verification
-Input baseline contained 230 files. No pre-existing file was intentionally removed. All changed and added paths are tied to schema, API, UI, tests, versioning, or documentation. Final packaging excludes `.venv`, `node_modules`, `dist`, caches, coverage, generated data, temporary databases, and compiler artifacts.
+Input baseline contained 237 files. No pre-existing file was intentionally removed. Final packaging excludes virtual environments, node_modules, build output, caches, coverage, generated data, temporary databases, and compiler artifacts.
 
 ## Traceability Matrix
 | Research need | User story id | Plan requirement | Implementation evidence | Test evidence | Status |
 |---|---|---|---|---|---|
-| Ground claims | US-001 | PR-1 | trusted route, evidence tables/validation | selected schema/rule tests | COMPLETE |
-| Correct speakers | US-002 | PR-1 | persistent mapping endpoint/revision update | mapping rule + contract tests | COMPLETE |
-| Gate publication | US-003 | PR-2 | decisions and immutable publish endpoint | policy tests | PARTIAL |
-| Track/delete derivatives | US-007 | PR-3/PR-4 | lineage/deletion/status/receipt APIs | lineage/deletion and schema tests | PARTIAL |
-| Export audit evidence | US-008 | PR-5 | persisted chain validation/export API | audit chain/ZIP tests | COMPLETE |
-| Enforce policy | US-009 | PR-5 | versioned policy API/provider rules | policy contract/rule tests | PARTIAL |
+| Safe sharing | US-003 | PR-3 | share policy + linked columns | strict/compatibility tests | COMPLETE |
+| Activity visibility | US-002 | PR-2 | MeetingActivity component | type-check/build | PARTIAL |
+| Data lineage UX | US-007 | PR-4 | MeetingData component | type-check/build | PARTIAL |
+| Durable deletion | US-007 | PR-5 | quarantine + jobs service | receipt/deletion rules | PARTIAL |
+| Verifiable receipt | US-007 | PR-5 | receipts service | mutation test | COMPLETE |
+| Audit/policy enforcement | US-008/US-009 | PR-6 | existing API/rules | existing selected tests | PARTIAL |
 
 ## Suggested Commit Message
-`trusted-records: complete persistent review and governance APIs — 29 selected tests pass, 99% rule coverage`
+`trusted-workflows: gate shares and add quarantine deletion foundation — 32 selected tests pass`

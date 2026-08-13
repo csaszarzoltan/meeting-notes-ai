@@ -1,4 +1,4 @@
-# MeetingNotesAI 1.4.1
+# MeetingNotesAI 1.4.2
 
 MeetingNotesAI is a privacy-first FastAPI and React workspace that turns uploaded or live conversations into **reviewable evidence, approved notes, accountable actions, and controlled shares**.
 
@@ -82,3 +82,7 @@ Run `uv run pytest -q -n 0`, `uv run ruff check .`, and in `frontend/`, run `npm
 ## Trusted-record and governance APIs
 
 Version 1.4.1 adds persistent trusted-record endpoints under `/api/v1/trusted` for record retrieval, optimistic claim edits, speaker mapping, decisions, publishing, and activity. Governance endpoints under `/api/v1/governance` provide lineage, deletion jobs and receipts, signed audit exports, and versioned policies. Claim edits require `If-Match`; strict healthcare/legal publishing fails closed when evidence or approval is missing. Set `AUDIT_EXPORT_SIGNING_KEY` to at least 32 bytes before downloading receipts or exports.
+
+## Trusted workflow enforcement
+
+Version 1.4.2 adds snapshot gating to persistent share creation, quarantines meetings when deletion is requested, and moves destructive work into an idempotent deletion worker service. The meeting review workspace now includes Activity and Data tabs backed by trusted/governance APIs. Deletion receipts use canonical HMAC signatures and detect content modification. Set `AUDIT_EXPORT_SIGNING_KEY` to at least 32 bytes before worker execution when signed receipts are required.

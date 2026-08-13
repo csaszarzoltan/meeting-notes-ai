@@ -2,59 +2,67 @@
 
 ## Executive Summary
 
-This is a **completion and integration pass**, not a new-feature pass. The previous development phase delivered tested domain rules for evidence validation, speaker mapping, approval evaluation, artifact graphs, deletion outcome classification, audit-chain export, and provider policy, but it explicitly left the sellable user journeys partial. This plan closes those gaps through two bounded features:
+This pass is the final **integration, enforcement, and user-experience completion** pass for the research-backed trusted-record strategy. The repository now contains a corrective schema, persistent trusted/governance endpoints, tested domain rules, and a functional Compliance Center, but the latest development report truthfully identifies three remaining product gaps: selected policies are not enforced across every legacy workflow, artifact lineage is not populated by every derivative-producing path, and the Review/Transcript/Activity/Data experience is not complete or browser-verified.
 
-1. **Trusted Review Completion** (`US-001`, `US-002`, `US-003`): persistent transcript segments, claims, evidence, speaker revisions, review decisions, immutable snapshots, exact API contracts, share gating, and the complete Review/Transcript/Activity UI.
-2. **Governance Workflow Completion** (`US-007`, `US-008`, `US-009`): full additive schema, artifact registration hooks, lineage APIs and Meeting Data UI, idempotent deletion jobs and signed receipts, audit export APIs/UI, policy persistence/preflight, and provider fail-closed integration.
+Two features are selected:
 
-The scope reuses the existing FastAPI, async SQLAlchemy/Alembic, React/TypeScript/Vite, storage, sharing, workflow, and rule modules. It intentionally does not revisit already-green pure rule behavior except where persistence integration exposes a defect. It also includes a **baseline-stabilization gate** for the 23 existing regression failures reported in `development-report.md`: the developer must separate environmental dependency failures from deterministic project defects, fix all deterministic failures affected by global state/import order, and cannot declare completion until the full suite is green or each remaining failure is proven pre-existing and formally blocked with reproducible evidence.
+1. **Trusted Record UX Completion** (`US-001`, `US-002`, `US-003`): connect the existing trusted API to a complete meeting-detail experience, enforce immutable publication at legacy sharing boundaries, and make speaker correction, conflict recovery, activity, and snapshot sharing work end to end.
+2. **Governance Enforcement Completion** (`US-007`, `US-008`, `US-009`): register every planned derivative, enforce provider policy before outbound work, move deletion execution behind a durable worker boundary, finish Data/Audit/Policy screens, and provide browser, accessibility, and screenshot evidence.
+
+A third workstream, **regression stabilization**, is a release gate rather than a product feature. The 23 repeatable failures documented in two consecutive development reports must be fixed without weakening tests. No new market feature is admitted until the full suite is green.
 
 ## Current-State Validation
 
-The research remains aligned with the product: trustworthy, source-linked review and governance are still the strongest differentiation. The actual repository now contains partial v1.4.0 foundations:
+Verified current state:
 
-- Complete pure-domain rules in `services/evidence.py`, `services/review.py`, and `services/governance/*` with 23 selected-scope tests and 99% measured scoped coverage.
-- ORM classes for transcript segments, claims, evidence, policy versions, artifacts, edges, deletion jobs, and audit events in `db/models.py`.
-- Migration `20260813_0006_trusted_records.py`, but it creates only transcript, claim, and evidence tables and therefore does not match the ORM or approved design.
-- No `routes/trusted_records.py` or `routes/governance.py`; no persistent service orchestration; no share-route policy integration; no provider preflight hook; no artifact registration hooks.
-- Existing `ReviewWorkspace.tsx` offers summary review and evidence presentation, but not claim-level persisted evidence, conflict resolution, speaker mapping, immutable publish snapshots, Activity, or Data screens.
-- `ComplianceCenter.tsx` contains presentational Audit exports and Data policies tabs, but their controls are not connected to real endpoints.
-- The prior report records 1,390 collected tests, 23 selected tests passing, 99% scoped coverage, frontend build/typecheck passing, startup passing, and 23 full-regression failures.
+- `routes/trusted_records.py` exposes record, claim update, speaker mapping, decision, publish, and activity routes.
+- `routes/governance.py` exposes lineage, deletion, receipt, audit export, and policy routes.
+- Migration 0007 completes the missing schema; ORM includes review, snapshot, policy, artifact, deletion, and audit entities.
+- The pure evidence/review/governance rule modules have 23 green BDD-derived tests and 99% measured coverage.
+- New schema/contract tests bring the selected suite to 29 green tests.
+- Compliance Center uses real audit-export and policy-loading endpoints, but administrators manually enter a team ID, policy editing is read-only, and audit jobs are synchronous downloads.
+- `ReviewWorkspace.tsx` still uses the older workspace review endpoint and does not consume `trustedRecords.ts`.
+- No complete Meeting Activity or Meeting Data component exists.
+- Legacy share creation does not require an eligible snapshot.
+- Storage, export, webhook, and PM integration paths do not comprehensively register artifact metadata.
+- Provider policy is not invoked before every transcription/extraction/storage outbound action.
+- Deletion is executed synchronously in the HTTP request.
+- Full regression remains at 23 failures in the same groups across two phases; Playwright, axe, and screenshots remain absent.
 
-The new plan replaces the earlier broad `implementation-plan.md` with a narrower recovery contract. It does not treat partially implemented capabilities as finished and does not duplicate already completed rule tests unless needed for integration.
+The research recommendations continue to match these gaps. Completing trust, lineage, and policy enforcement produces more value and lower risk than starting desktop capture or another integration.
 
 ## Research Priorities
 
-| Priority | Research item | Current state | Planning decision |
+| Priority | Research recommendation | Current maturity | Decision |
 |---|---|---|---|
-| P0 | Evidence-grounded review | Rule core complete, persistence and UI partial | Complete end to end. |
-| P0 | Speaker correction and quality queue | Atomic rule complete, no persistent API/UI | Complete end to end. |
-| P0 | Artifact lineage and verifiable deletion | Graph/outcome rules complete, orchestration absent | Complete end to end. |
-| P1 | Tamper-evident audit export | ZIP rule complete, no persistence/API/UI | Complete operational flow. |
-| P0 | Storage/provider boundaries | Rule complete, no processing hook | Complete policy persistence and preflight. |
-| P0 | Regression confidence | 23 full-suite failures reported | Stabilize and require objective disposition. |
-| Deferred | Bot-free desktop capture | Not started | Keep deferred to a dedicated desktop phase. |
+| P0 | Evidence-grounded review and approval | API foundation present, UX/integration partial | Complete now. |
+| P0 | Speaker correction and quality queue | Rule/API present, UX absent | Complete now. |
+| P0 | Artifact lineage and verifiable deletion | API present, hooks/job architecture partial | Complete now. |
+| P1 | Audit export and policy control | Basic APIs/UI present | Complete editable, asynchronous, verified flow. |
+| P1 | Accessibility/browser E2E | Not implemented | Mandatory in this pass. |
+| P0 release gate | Regression stability | 23 repeatable failures | Mandatory before done. |
+| Deferred | Bot-free desktop capture | Not started | Next independent phase. |
 
 ## Selected Scope for This Pass
 
-### Feature 1: Trusted Review Completion
+### Feature 1: Trusted Record UX Completion
 
-Persist and expose the already-designed trusted record. Users can open a meeting, navigate canonical transcript evidence, correct speakers atomically, edit/ground claims under optimistic concurrency, approve or reject claim versions, publish an immutable snapshot, and share only a policy-compliant snapshot. Includes Review, Transcript, and Activity screens. Stories: `US-001`–`US-003`.
+Use the existing trusted endpoints as the source of truth for meeting review. Deliver claim-level evidence review, atomic speaker mapping, optimistic-edit conflict recovery, activity history, immutable publication, and snapshot-gated sharing in the existing React workspace. Preserve non-strict compatibility only for historical meetings under compatibility policy.
 
-### Feature 2: Governance Workflow Completion
+### Feature 2: Governance Enforcement Completion
 
-Persist complete policy/artifact/deletion/audit models; register every selected derivative; enforce provider policy before outbound work; show lineage; execute idempotent internal deletion with honest external remediation; generate signed receipts; validate/export audit chains; and provide functional Compliance/Audit/Policy/Data UI. Stories: `US-007`–`US-009`.
+Add artifact registration at every planned derivative boundary, durable deletion/export jobs, signed receipt verification, outbound provider preflight, editable policy UI, Meeting Data lineage/deletion UI, and complete Audit Export UI. Add browser automation, accessibility checks, and screen captures.
 
 ## Deferred Scope and Rationale
 
-1. Bot-free Windows/macOS desktop capture, local-only summarization, managed-device deployment: separate OS/signing/model pass.
-2. New CRM or PM adapters: existing four adapters are adequate for lineage integration.
-3. Integration outbox/reconciliation beyond artifact registration: future reliability pass after trusted-record IDs stabilize.
-4. Broad WER/DER benchmark: future model-quality pass; this pass measures grounding and review behavior only.
-5. Billing and pricing: future paid-pilot phase.
-6. Native mobile apps: responsive web remains supported.
-7. Public-key audit signatures: HMAC is retained for compatibility; asymmetric verification is a future security enhancement.
-8. Compliance certification: requires legal, contractual, and organizational work outside engineering.
+1. Desktop microphone/system-audio companion and local-only summarization: separate OS signing/model qualification pass.
+2. Managed-device deployment: depends on desktop client.
+3. New PM/CRM adapters: current adapters are sufficient for governance-hook coverage.
+4. Broad WER/DER benchmark: independent model-quality pass.
+5. Billing/pricing: requires paid pilots after trusted workflows are complete.
+6. Native mobile apps: responsive web is sufficient for this pass.
+7. Public-key audit signatures: HMAC retained; asymmetric verification is a future security pass.
+8. Compliance certification: outside engineering scope.
 
 ## User Stories (BDD)
 
@@ -62,7 +70,7 @@ Persist complete policy/artifact/deletion/audit models; register every selected 
 [
   {
     "id": "US-001",
-    "epic": "Trusted Review Completion",
+    "epic": "Trusted Record UX Completion",
     "role": "reviewer",
     "action": "open every generated claim at its supporting transcript span",
     "benefit": "I can verify notes before approval",
@@ -98,7 +106,7 @@ Persist complete policy/artifact/deletion/audit models; register every selected 
   },
   {
     "id": "US-002",
-    "epic": "Trusted Review Completion",
+    "epic": "Trusted Record UX Completion",
     "role": "team member",
     "action": "correct a speaker once across selected transcript segments",
     "benefit": "actions and decisions are attributed correctly",
@@ -134,7 +142,7 @@ Persist complete policy/artifact/deletion/audit models; register every selected 
   },
   {
     "id": "US-003",
-    "epic": "Trusted Review Completion",
+    "epic": "Trusted Record UX Completion",
     "role": "workspace admin",
     "action": "require human approval for sensitive meeting modes",
     "benefit": "unreviewed AI output cannot be shared as an official record",
@@ -170,7 +178,7 @@ Persist complete policy/artifact/deletion/audit models; register every selected 
   },
   {
     "id": "US-007",
-    "epic": "Governance Workflow Completion",
+    "epic": "Governance Enforcement Completion",
     "role": "workspace admin",
     "action": "see one lineage graph for each meeting artifact",
     "benefit": "I know where sensitive content was copied",
@@ -206,7 +214,7 @@ Persist complete policy/artifact/deletion/audit models; register every selected 
   },
   {
     "id": "US-008",
-    "epic": "Governance Workflow Completion",
+    "epic": "Governance Enforcement Completion",
     "role": "security administrator",
     "action": "export tamper-evident audit evidence",
     "benefit": "I can support an incident or compliance review",
@@ -242,7 +250,7 @@ Persist complete policy/artifact/deletion/audit models; register every selected 
   },
   {
     "id": "US-009",
-    "epic": "Governance Workflow Completion",
+    "epic": "Governance Enforcement Completion",
     "role": "workspace owner",
     "action": "enforce regional storage and provider rules",
     "benefit": "new meetings stay within approved data boundaries",
@@ -281,193 +289,208 @@ Persist complete policy/artifact/deletion/audit models; register every selected 
 
 ## Product Requirements
 
-### PR-1 Persistent trusted record (`US-001`, `US-002`)
+### PR-1 Trusted meeting-detail integration (`US-001`)
 
-- On transcription finalization, persist one revision of ordered `TranscriptSegment` rows. Each row has stable UUID, meeting ownership, ordinal, millisecond boundaries, raw speaker label, canonical speaker mapping, text, confidence, and revision.
-- On extraction finalization, persist summary, decision, key-point, and action claims. Every claim stores status and integer version.
-- Persist evidence spans only after calling existing `validate_spans`; reject empty evidence for strict publication, cross-meeting segments, out-of-bound times, and non-positive ranges with HTTP 422 and stable error codes.
-- Historical meetings without persisted rows are lazily projected once from existing transcript/evidence fields when first opened. Projection is idempotent and marks unsupported claims `legacy_unverified`; it never fabricates timestamps.
-- Speaker mapping persists `SpeakerMapping` and new segment revision in one transaction. Maximum 500 segment IDs. Unknown IDs, cross-meeting IDs, blank names, stale version, or ambiguous user display name fail without mutation.
-- Approved impacted claims become `needs_reapproval`; draft attribution may be recalculated. Original raw labels remain immutable.
-- Claims use `If-Match` integer version. Missing header returns 428; stale returns 409 with current representation and ETag; successful update increments exactly once.
+- `ReviewWorkspace` loads `GET /api/v1/trusted/meetings/{id}/record`; the old workspace detail is used only as a migration fallback when the trusted route returns a documented legacy-projection response.
+- Render each claim independently with type, text, status, version, approvals, and evidence chips.
+- Evidence chip selects the canonical segment, seeks audio to `start_ms` with observed player position within 1,000 ms, and focuses/highlights the cited text.
+- Claim editing sends `If-Match` with the current version and the edited evidence list. Successful save updates ETag/version once. A 409 opens conflict recovery without discarding local text.
+- Conflict choices are exact: `Keep current`, `Use mine as new revision`, `Cancel`. “Use mine” reloads current state, reapplies local text/evidence, and submits with the new version.
+- Unsupported legacy claims show `Evidence required`; strict publish remains disabled. Users can select one or more transcript segments and attach bounded evidence.
+- Publish displays blocker codes next to affected claims. Successful publish displays snapshot version, SHA-256 abbreviation, creator, and `Share snapshot` CTA.
 
-Acceptance: all selected story criteria pass through service, route, database, and browser tests; a newly published strict record has 100% grounded claims; seek delta is at most 1,000 ms; stale edits and mappings produce zero partial writes.
+Measurable acceptance: every newly published strict claim has one or more persisted same-meeting spans; no edit is lost on 409 or retryable network error; published snapshot bytes/hash remain stable after later edits.
 
-Non-goals: biometric speaker recognition, changing STT provider, automatically grounding unsupported legacy content, or claiming a citation proves factual truth.
+### PR-2 Speaker correction and activity (`US-002`)
 
-### PR-2 Review, approval, snapshot, and share gating (`US-001`, `US-003`)
+- Transcript screen lists canonical segments in ordinal order and uses buttons for speaker labels.
+- Mapping dialog requires either a uniquely selected workspace user with email or a nonblank guest name. It supports `This segment`, `Selected segments`, and `All <raw label>` scopes, maximum 500.
+- Preview shows affected segment count and approved claims that will require reapproval.
+- Apply invokes persistent mapping endpoint once and updates all impacted segments transactionally. Server error or stale version leaves UI and database unchanged.
+- Activity screen consumes trusted activity endpoint and displays actor, decision, timestamp, claim version, policy version when available, and safe expandable metadata. It never displays transcript text in collapsed or expanded audit metadata.
+- Keyboard: J/K moves segments, Enter opens speaker dialog, Escape closes/restores focus, Space controls playback only outside form fields.
 
-- Add complete policy versions by meeting mode: `strict_grounding`, `required_approvals` 0–2, and reviewer roles. Existing teams receive compatibility version 1 that preserves current sharing; new teams default healthcare/legal to strict plus one approval and general to non-strict/zero.
-- Review decisions target a claim ID and claim version, record actor, decision, optional rejection reason, timestamp, and policy version.
-- Approval roles are checked server-side. Duplicate approval from the same actor counts once.
-- Publish evaluates policy in one transaction and returns deterministic blockers: `UNSUPPORTED`, `REJECTED`, `NEEDS_REAPPROVAL`, `APPROVALS_REQUIRED`, `STALE_TRANSCRIPT`.
-- Successful publish creates immutable canonical JSON snapshot with SHA-256, monotonically increasing per-meeting version, creator, policy version, and approver IDs.
-- Existing share endpoints remain. New shares select the latest eligible snapshot. Strict meetings without one return 409 `POLICY_NOT_SATISFIED`; policy-service errors fail closed. Existing non-strict meetings preserve old shape and gain nullable snapshot/review fields.
-- Shared snapshots never change after later transcript or claim edits.
+Measurable acceptance: mapped segments share the returned revision; ambiguous display names cannot be submitted without an email selection; failed mapping produces zero partial updates; approved impacted claims immediately display `Reapproval required`.
 
-Acceptance: strict share cannot bypass publish; snapshot bytes/hash remain stable; permissions and policy versions are auditable; all old endpoint paths remain covered.
+### PR-3 Snapshot-gated legacy sharing (`US-003`)
 
-### PR-3 Artifact registry and integration hooks (`US-007`, `US-009`)
+- Both existing share endpoints call one common `assert_share_allowed(meeting_id, user/team, db)` service before token creation.
+- Strict meetings require latest eligible published snapshot under active policy. If absent/stale, return 409 with `POLICY_NOT_SATISFIED` and blocker array.
+- Compatibility-policy historical meetings preserve existing share behavior. Every newly configured strict policy fails closed on evaluator/service error.
+- New share rows store nullable `snapshot_id` and `policy_version_id`; migration adds both columns without changing existing rows.
+- Public share response renders the immutable snapshot payload when linked, never the current draft.
+- Revocation behavior remains unchanged.
 
-- Complete persistence for artifacts and edges with team/meeting ownership, kind, location class, encrypted opaque reference, stable source key, content hash when available, retention state, policy version, and timestamps.
-- Register raw audio, transcript revision, claim set, snapshot, export, share, webhook delivery payload, and PM task reference.
-- Registration occurs in the same transaction for database derivatives; external side effects use a compensating registration step and fail visibly if metadata cannot be recorded.
-- Stable source key uniqueness is `(team_id, source_key)`, not global. Replays return the existing artifact.
-- Edges support planned relation types and reject self-edge, cross-team edge, cross-meeting edge unless explicitly workspace-level, duplicate edge, and cycles.
-- The API returns no decrypted location references. Admin detail returns a redacted destination label only.
+Measurable acceptance: no strict token is created on failure; shared content hash equals snapshot hash; later draft edits do not alter existing public response; all existing sharing regression tests stay green.
 
-Acceptance: every newly created selected derivative has a row and parent edge; retries create no duplicates; cross-tenant graph access is 404; all registration-hook regressions pass.
+### PR-4 Artifact registration and lineage (`US-007`)
 
-### PR-4 Deletion workflow and receipt (`US-007`)
+- Introduce `ArtifactRegistry` async service using `(team_id, source_key)` idempotency and encrypted opaque location references.
+- Register: audio upload/storage, transcript revision, claim set, snapshot, export, share, webhook payload delivery, and PM task reference.
+- Database derivatives register inside the same transaction. For external calls, reserve a pending artifact before the call, then mark active with provider reference or failed with safe code. A failed registration prevents silent success.
+- Every artifact has a required parent edge except source audio. Reject self, duplicate, cross-team, invalid cross-meeting, and cycle-forming edges.
+- Lineage response includes node counts and remediation summary but never decrypted references.
+- Historical meetings with no registry remain readable and display a warning; no fake lineage is generated.
 
-- Exact-title confirmation and owner/admin authorization are mandatory.
-- Create at most one active deletion job per meeting; repeated requests return the existing job. Quarantine immediately hides the meeting from normal list/search/share and blocks new derivatives.
-- A deterministic worker claims a job using database locking, processes leaves before parents, revokes shares, deletes internal database/object artifacts via existing services, and classifies absent data idempotently.
-- External PM/webhook copies are never claimed deleted without confirmed provider delete behavior; otherwise result is `external_remediation_required` with destination label and instructions.
-- Internal failure keeps quarantine, records safe error code, and permits retry of failed artifacts only.
-- Complete job creates a signed JSON receipt artifact containing no transcript/claim text. It includes requestor, policy version, per-artifact result, terminal audit hash, generated timestamp, and HMAC signature.
+Measurable acceptance: one artifact and required edge per successful derivative; exact replay creates no duplicate; cross-tenant query is 404; graph is acyclic; failed external call remains observable and contains no token/URL.
 
-Acceptance: internal data is inaccessible within 60 seconds of successful worker completion; retry does not repeat successful deletion; unauthorized calls cause no state change; receipt verifies with configured key.
+### PR-5 Durable deletion and receipts (`US-007`)
 
-### PR-5 Audit export and policy preflight (`US-008`, `US-009`)
+- HTTP request only validates, quarantines, and creates/returns one active job. It must not execute deletion inline.
+- Add database worker claim using transaction/state transition `pending → processing`; expose deterministic `run_deletion_job(job_id)` for tests and worker command.
+- Worker processes leaves before parents, revokes shares, deletes internal files/rows, preserves receipt/audit metadata, and marks external copies `external_remediation_required` unless verified delete is supported.
+- Partial failures become `completed_partial`; retry resets only failed internal results to pending. Successful results never repeat.
+- Quarantined meetings disappear from normal list/search/share and block new exports/integrations immediately.
+- Receipt is canonical signed JSON with job, requestor, policy version, terminal audit hash, per-artifact outcome, generated timestamp; no content fields. Add verification endpoint or documented standalone verification command using the same canonicalization.
 
-- Complete database-backed hash chain with per-team serialization. Event hash includes event ID, team, actor, type, payload hash, previous hash, and timestamp in canonical JSON.
-- Validation reports first invalid event and does not mutate. Export range maximum 366 days.
-- Export job writes ZIP with `events.jsonl`, `manifest.json`, optional `events.csv`; manifest hashes all members and is HMAC-signed with minimum 32-byte `AUDIT_EXPORT_SIGNING_KEY`.
-- Missing/short key fails readiness in production and disables export with 503, without exposing secret details.
-- Complete versioned data policy: allowed providers, configured storage backend and region, prohibit-fallback boolean, approval rules. Save is optimistic by expected version.
-- Every transcription/extraction/storage operation calls policy preflight before network or persistence. Blocked provider makes zero outbound calls. Unavailable approved provider pauses/fails retryably; no silent provider fallback.
-- Existing teams receive compatibility policy derived from current settings.
+Acceptance: request latency does not depend on artifact count; successful internal artifacts become inaccessible within 60 seconds of worker completion; retry is idempotent; receipt signature detects one-byte modification.
 
-Acceptance: one-byte mutation is detected; empty export is valid; policy conflict is 409; blocked provider yields zero mocked HTTP calls; decision record captures policy version and outcome.
+### PR-6 Audit export jobs and editable policies (`US-008`, `US-009`)
 
-### PR-6 Regression stabilization
+- Audit export creation returns 202 job ID. Worker validates chain before writing ZIP to configured storage; status/download endpoints return progress and terminal state.
+- Manifest hashes every member and includes filter range, count, first/last event IDs, terminal hash, generated time, signature.
+- Missing/short key fails production readiness and returns 503 without leaking configuration.
+- Policy UI loads current policy from selected workspace context, not a manually entered team ID. Admin can edit allowed providers, storage backend/region, prohibit fallback, and approval mode matrix.
+- Save uses `expected_version`, shows a field-by-field diff, and activates only after `Activate policy` confirmation. 409 presents current server version and `Reload policy`.
+- Processing hooks call policy preflight before OpenAI/local transcription selection, extraction provider calls, and storage choice. Blocked provider generates a persisted policy decision and zero outbound calls. No fallback when prohibited.
 
-- Reproduce baseline from a clean `uv sync --frozen` with no ad-hoc installs. If lockfile lacks declared dependencies, update lockfile intentionally.
-- Address deterministic failures identified in prior report, especially session-factory global state leakage, local-transcription import isolation, diarization boundary behavior, and route fixture contamination.
-- Do not relax assertions, mark failures xfail, or remove tests merely to achieve green.
-- If a failure requires unavailable external credentials/service, convert it to a deterministic hermetic test with mocked network and real local persistence where appropriate.
+Acceptance: audit empty and nonempty jobs download valid ZIPs; mutation blocks export; policy version increments exactly once; blocked-provider network mock observes zero calls; provider outage pauses/fails retryably without fallback.
 
-Acceptance: `uv run pytest -q -n 0` exits 0; 0 failed, 0 errors; expected xfails are documented and unchanged or reduced.
+### PR-7 Regression stabilization release gate
+
+Fix the 23 repeatable failures without changing expected behavior or adding xfail/skip markers:
+
+- API-key auth/fixture isolation.
+- `_session_factory` reset and per-test database lifecycle.
+- batch transcription mode threading.
+- diarization maximum-overlap and boundary-touch behavior.
+- Google Calendar connected status hermetic state.
+- healthcare mode/review-status finalization persistence.
+- local transcription import isolation from OpenAI.
+
+Use `uv sync --frozen`; no ad-hoc package installs. If lockfile is stale, update it and prove a clean sync. Full test command must exit 0.
 
 ## UI and UX Specification
 
-### Personas and primary journeys
+### Personas and journeys
 
-Reviewer: Meetings → Review → evidence → correction → approve → publish → share. Admin: Meeting Data → lineage → delete preview → job → receipt. Security admin: Compliance → Audit exports or Data policies → validate/save → visible success.
+Reviewer: Meetings → Review claim → inspect evidence → correct speaker → approve → publish → share snapshot. Workspace admin: Meeting Data → inspect lineage → delete → monitor → download receipt. Security admin: Compliance → Audit exports/Data policies → validate/edit → activate/download.
 
-### Navigation and design system
+### Information architecture
 
-Reuse the existing application shell and CSS tokens. No library rewrite. Meeting detail uses tabs `Review`, `Transcript`, `Activity`, `Data`. Compliance uses functional tabs `Overview`, `Audit exports`, `Data policies`. Extend existing primitives rather than introducing a component library. Add Playwright and `@axe-core/playwright` only as dev dependencies.
+Reuse existing shell. Meeting detail gains first-class tabs `Review`, `Transcript`, `Activity`, `Data`. Compliance retains `Overview`, `Audit exports`, `Data policies`; remove team-ID input and infer current workspace. Dashboard admin onboarding card links to Policy and a read-only sample trusted record.
 
-Tokens: spacing 4/8/12/16/24/32/48 px; radii 6/10/16 px; minimum touch 44×44 px; 2 px visible focus plus 2 px offset; body 16/24; small 14/20; heading 20/28 and 28/36. All status uses icon plus text. WCAG 2.2 AA contrast. Reduced motion disables transform and limits opacity transition under 100 ms.
+### Design system
+
+Reuse existing CSS and components. Add shared primitives only: `Tabs`, `Dialog`, `Drawer`, `InlineAlert`, `Skeleton`, `StatusBadge`, `EmptyState`, `JobProgress`. No UI library. Tokens: 4/8/12/16/24/32/48 spacing; 6/10/16 radii; 44px targets; 2px visible focus with 2px offset; body 16/24; small 14/20; headings 20/28 and 28/36. WCAG 2.2 AA. Status always icon plus text. Reduced motion disables transforms and caps opacity transitions at 100 ms.
 
 ### Shared states
 
-Every screen has skeleton, actionable empty state, disabled explanation, inline validation, error with `Retry`, success announcement, and recovery behavior. Route loads focus `h1`; dialogs trap/restore focus. Mutations preserve input and disable only their own controls. Polling stops when tab hidden and resumes safely.
+Every screen must implement skeleton/loading, empty, disabled with reason, inline validation, recoverable error with `Retry`, success announcement, and permission-denied absence. Mutations retain input. `role=status` for success/progress; `role=alert` for destructive failures. Route changes focus H1. Dialogs trap focus and restore opener.
 
 ## Screen Inventory and User Flows
 
-### Screen 1: Meeting Review
+### 1. Review
 
-Header: breadcrumb, meeting title/mode, review badge, `Publish reviewed notes` primary CTA, `More`. Body desktop 58/42 transcript-evidence and claim list; mobile claims first and evidence bottom drawer. Claim card: type, text, evidence chips, status, approval count, `Edit`, `Approve`, `Reject`. Evidence click seeks player and highlights exact segment. Conflict dialog offers `Keep current`, `Use mine as new revision`, `Cancel`. Empty legacy state says no evidence and offers `Add evidence`; it never implies verification.
+Header: breadcrumb, title/mode/status, `Publish reviewed notes`, overflow. Desktop body 58% transcript/evidence and 42% claim list; mobile claim page with full-height evidence drawer. Claim card contains type, text, evidence, approvals, edit/approve/reject. Blocker summary is placed below primary CTA and links to each blocked card.
 
-Success flow: open → select claim → citation seeks → edit/approve → blockers count reaches zero → publish → immutable snapshot banner → `Share snapshot`. Failure: stale save → 409 dialog → reload/current or create revision → no input loss.
+Empty: “No generated claims yet” with `Run extraction`. Legacy: “Evidence is unavailable for this older meeting” with `Add evidence`. Loading uses stable skeleton dimensions. Publish success shows snapshot version/hash and `Share snapshot`. Conflict dialog follows PR-1 exact labels.
 
-### Screen 2: Transcript and Speaker Mapping
+### 2. Transcript
 
-Sticky player; transcript search/filter; semantic paginated segment list; speaker label buttons. Dialog contains member/guest search, unique email for members, scope radio buttons, affected count, impacted claims, `Apply mapping`. Loading and rollback states are explicit. Approved impacted claims visibly become `Reapproval required`. Keyboard J/K moves segment, Enter opens mapping, Space controls audio only outside input.
+Sticky player; search/filter; paginated semantic segment list; selectable rows; speaker buttons. Mapping dialog block order: current raw label, member/guest combobox, scope, affected count, impacted claims, warning, `Apply mapping`. On success announce revised segment count; on rollback show original labels.
 
-### Screen 3: Meeting Activity
+### 3. Activity
 
-Filter row for actor/type/date. Chronological list with actor, event, timestamp, claim/snapshot/policy version. Expand reveals safe metadata, never transcript text. Empty state `No trusted-record activity yet`. Errors retain filters.
+Filter controls for actor/event/date; chronological semantic list. Each event shows actor, action, timestamp, claim/snapshot/policy version. Safe metadata expansion. Empty state and retry retain filters.
 
-### Screen 4: Meeting Data
+### 4. Data
 
-Summary cards; accessible nested lineage tree as primary representation; optional CSS graph on wide screens; detail drawer; destructive footer. Node details show kind, internal/external, hash availability, policy and retention. `Delete meeting data` opens grouped impact preview; exact title enables `Delete permanently`. Job progress shows completed/failed/remediation counts. Partial failure offers `Retry failed deletions`. Success offers `Download deletion receipt`.
+Summary cards, accessible nested lineage tree, optional CSS graph on ≥1024 px, node drawer, deletion footer. Node drawer shows kind, location class, hash availability, retention, policy, relationships. Delete modal groups internal deletion, revocation, external remediation; exact title confirmation. Job page polls persisted state, shows counts, partial retry, signed receipt download/verify.
 
-### Screen 5: Audit Exports
+### 5. Audit Exports
 
-Functional filter form, chain-health card, recent jobs. `Validate and export` starts real job; progress shows validation/build/sign. Invalid chain identifies event ID and blocks download. Empty result explicitly says zero events and still provides valid ZIP. Download button names file with UTC range.
+Current workspace displayed read-only. Form: date range, event types, CSV toggle. Chain-health card and recent jobs table/cards. `Validate and export` creates job. Progress labels: `Queued`, `Validating chain`, `Building files`, `Signing manifest`, `Ready`. Invalid-chain state identifies first invalid ID and disables download. Empty valid result downloads count-zero ZIP.
 
-### Screen 6: Data Policies
+### 6. Data Policies
 
-Active policy/version, server-provided provider capabilities, storage backend/region, `Prohibit fallback`, approval matrix by mode, impact summary, history. `Review changes` opens diff; `Activate policy` requires confirmed diff. Version conflict shows current version and `Reload policy`. Warning states existing meetings retain recorded policy version.
+Active version card; provider checkboxes; storage/region selects from server capabilities; prohibit-fallback toggle; approval matrix by General/Healthcare/Legal; version history. `Review changes` opens diff. `Activate policy` confirmation. Conflict state offers `Reload policy`; input is not silently overwritten.
 
-### Screen 7: Trusted-record onboarding task
+### 7. Onboarding
 
-Dashboard card for admins only, with `Review compatibility policy` and `Enable strict review` steps. Existing teams are never silently tightened. New team flow uses documented defaults and a read-only sample record.
+Admin-only dashboard card `Configure trusted records`: review compatibility policy, enable strict modes, inspect sample. Existing teams remain compatibility mode until explicit activation. New teams receive documented defaults.
 
 ### Responsive and verification
 
-Test 320, 768, 1024, 1440 CSS px. No horizontal page scroll at 320; tables become cards; lineage uses tree; evidence drawer fills viewport. Playwright captures Review success, Review conflict, Transcript mapping, Data lineage, deletion partial/success, Audit empty/success/error, Policy validation/conflict at desktop and mobile. Axe: zero serious/critical; manual keyboard, focus, 200% zoom, reduced motion, screen-reader names.
+Breakpoints: mobile ≤767, tablet 768–1023, desktop ≥1024. Validate 320, 768, 1024, 1440. No horizontal page scroll at 320. Tables become labeled cards; evidence and node details use drawers. Playwright screenshots: each screen success, empty, error at desktop; Review, Transcript, Data, Policy at mobile. Axe requires zero serious/critical. Manual keyboard, 200% zoom, focus order, reduced motion, screen-reader names checklist.
 
 ## Architecture and Technical Design
 
-- Extend `services/evidence.py` with async persistence orchestration without weakening pure validators.
-- Extend `services/review.py` with repository-backed revisions, decisions, snapshots, blockers.
-- Add `services/governance/repository.py`, `jobs.py`, `receipts.py`; extend artifacts/deletion/policies/audit modules.
-- Add `routes/trusted_records.py` and `routes/governance.py`, wire in `main.py`.
-- Use async SQLAlchemy transactions and current session dependency. Avoid module-global mutable state.
-- Job execution: database job state plus deterministic claim/run functions. In-process background dispatch is allowed for development startup, but state makes restart safe; tests call worker directly.
-- Frontend API modules `trustedRecords.ts` and `governance.ts`; route state remains local React state. Poll 2 s, back off to 10 s after 30 s.
-- Registration hooks added to storage, extraction, export, sharing, webhooks, and PM integration workflows.
-- Structured logs contain operation/job/artifact IDs, counts, status and correlation ID only.
+- `services/trusted_records.py`: repository/orchestrator for legacy projection, claim update, speaker mapping, decisions, snapshots.
+- `services/share_policy.py`: single snapshot-gating service consumed by both share routes.
+- `services/governance/repository.py`: artifact/edge persistence and safe projection.
+- `services/governance/jobs.py`: deletion/audit-export claim/run/retry.
+- `services/governance/receipts.py`: canonical receipt sign/verify.
+- Existing rule modules remain pure.
+- `routes/trusted_records.py` and `routes/governance.py` become thin validation/authorization adapters.
+- Add CLI or scheduled worker entrypoint `python -m meeting_notes_ai.workers.governance` with bounded polling and graceful shutdown.
+- Frontend API clients use current session token consistently; no manual team IDs.
+- State remains local React state plus route fetch; no Redux/query dependency.
+- Job polling: 2 seconds for 30 seconds, then 10 seconds; pause hidden tab; stop terminal.
+- Structured logs contain IDs/counts/status/correlation only.
 
-Alternatives rejected: new event bus, Redux/query library, component library, destructive rewrite, and completing desktop capture in this pass.
+Alternatives rejected: synchronous deletion/export, event-bus dependency, frontend rewrite, Redux, and starting desktop capture.
 
 ## Data, API, and Compatibility Changes
 
-### Schema and migration
+### Migration
 
-Replace incomplete migration `20260813_0006_trusted_records.py` only if it has not shipped; because this archive is development-only and report says partial, create a corrective `20260813_0007_complete_trusted_records.py` rather than rewriting history. It adds missing `speaker_mappings`, `review_decisions`, `published_snapshots`, `policy_versions`, `policy_decisions`, `artifacts`, `artifact_edges`, `deletion_jobs`, `deletion_results`, `audit_chain_events`, and `audit_exports`, plus required constraints/indexes. Align ORM exactly. Add unique/index constraints planned previously, including `(team_id, source_key)`, `(meeting_id, version)` snapshots/policies as applicable, and one-active-deletion enforced by transaction/query for SQLite compatibility.
+Add migration `20260813_0008_enforce_trusted_workflows.py`:
 
-### APIs
+- `shared_links.snapshot_id`, `shared_links.policy_version_id` nullable FKs.
+- artifact status/error fields required for pending/external workflows.
+- deletion/audit job progress attempt fields and stored receipt/export artifact references.
+- meeting quarantine fields (`quarantined_at`, `quarantine_job_id`) or equivalent explicit status columns.
+- constraints/indexes for job lookup and safe replay.
 
-- `GET /api/v1/trusted/meetings/{meeting_id}/record`
-- `PUT /api/v1/trusted/meetings/{meeting_id}/claims/{claim_id}` + `If-Match`
-- `POST /api/v1/trusted/meetings/{meeting_id}/speaker-mappings`
-- `POST /api/v1/trusted/meetings/{meeting_id}/claims/{claim_id}/decisions`
-- `POST /api/v1/trusted/meetings/{meeting_id}/publish`
-- `GET /api/v1/trusted/meetings/{meeting_id}/activity`
-- `GET /api/v1/governance/meetings/{meeting_id}/lineage`
-- `POST /api/v1/governance/meetings/{meeting_id}/deletions`
-- `POST /api/v1/governance/deletions/{job_id}/retry`
-- `GET /api/v1/governance/deletions/{job_id}`
-- `GET /api/v1/governance/deletions/{job_id}/receipt`
-- `POST /api/v1/governance/audit/validate`
-- `POST /api/v1/governance/audit/exports`
-- `GET /api/v1/governance/audit/exports/{export_id}` and `/download`
-- `GET /api/v1/governance/policies/current`, `GET /policies`, `POST /policies`
+Migration must upgrade from 0007 and downgrade in disposable SQLite; fresh head and upgraded pre-0008 database produce ORM parity.
 
-Responses use existing error envelope conventions. 400 malformed confirmation/filter; 403 authorization; 404 tenant-safe absence; 409 version/policy/job state; 422 evidence/validation; 428 missing If-Match; 503 missing signing key/policy dependency.
+### API changes
 
-Existing share routes and workspace review route remain and delegate. Add nullable fields only. No old URL is removed.
+Retain all current trusted/governance URLs. Modify deletion create to return 202 pending without executing. Add:
+
+- `POST /api/v1/governance/deletions/{job_id}/run` only in test/admin development mode, or invoke worker service directly; production route disabled.
+- `POST /api/v1/governance/deletions/{job_id}/verify-receipt` with receipt body, or CLI verifier.
+- `GET /api/v1/governance/audit/exports/{id}` and `/download`.
+- `GET /api/v1/governance/policies/capabilities`.
+- `GET /api/v1/trusted/meetings/{id}/activity` includes policy/snapshot versions.
+
+Both share endpoints preserve paths/response fields and add nullable snapshot metadata. Error envelope uses stable code/detail/blockers.
 
 ### Dependencies
 
-Backend runtime: none. Dev: add `pytest-cov` if absent from locked dev group. Frontend dev: Playwright and axe. Regenerate both lockfiles. Do not rely on ad-hoc `uv pip install`.
+Backend: add `pytest-cov` to locked dev group only if absent. Frontend dev: `@playwright/test`, `@axe-core/playwright`; add `test:e2e`, `test:a11y`, `screenshots` scripts and lockfile. No new runtime dependency.
 
 ## Security and Privacy Considerations
 
-Tenant ownership is included in every lookup and graph traversal. Cross-tenant resource IDs return 404. Audit/artifact metadata never stores transcript text, PHI, access tokens, or raw external URLs. Encrypt opaque references with current token encryption. Canonical hashing includes timestamp/event ID to prevent substitution. Use `hmac.compare_digest`. Production readiness requires 32-byte key. Strict policy and provider preflight fail closed. Deletion receipts state external remediation honestly. Maximums: 500 speaker segments, 100 evidence spans per claim, 366-day audit export, one active deletion. Rate-limit deletion/export endpoints. CSRF model remains bearer-token API; never put tokens in query strings. Logs redact content and secrets.
+Authorize every query by tenant/owner and return 404 for inaccessible IDs. Encrypt external references; never return raw URLs/tokens. Audit/artifact/job logs contain no transcript/PHI. Strict share and provider policy fail closed. Canonical signatures use `hmac.compare_digest`; keys ≥32 bytes in readiness. Rate limits: deletion creation, receipt verification, audit export. Limits: 500 mapped segments, 100 evidence spans, 366-day export, one active deletion. Worker uses idempotent transitions/attempt counts; no double processing. Public shares expose immutable snapshot only. Secret scan covers repository and screenshot metadata.
 
 ## Test Strategy (TDD)
 
-### RED order
+### RED sequence
 
-1. Baseline clean-install and full-suite reproduction test; fix deterministic baseline defects before feature integration.
-2. Migration fresh/upgrade/downgrade and ORM parity tests.
-3. `test_us_001_trusted_routes.py`: same-meeting evidence, seek timestamps, unsupported, 422, 428/409, lazy legacy projection.
-4. `test_us_002_speaker_persistence.py`: mapping transaction, ambiguity, stale rollback, reapproval.
-5. `test_us_003_publish_share.py`: approvals, immutable snapshot/hash, blockers, share fail-closed, compatibility mode.
-6. `test_us_007_artifact_hooks.py`: real SQLite plus temp filesystem, idempotent hooks, tenant isolation, graph.
-7. `test_us_007_deletion_job.py`: quarantine, leaf-first, absent, partial retry, external remediation, signed receipt.
-8. `test_us_008_audit_routes.py`: persisted chain, mutation, empty/signed ZIP, missing key, range.
-9. `test_us_009_policy_preflight.py`: versions, conflict, zero outbound call, unavailable pause, compatibility policy.
-10. Playwright/axe specs for all screens and recovery states.
+1. Reproduce and pin each of the 23 full-suite failures by group; write/fix isolation tests before product work.
+2. Migration 0008 fresh/upgrade/downgrade/ORM parity.
+3. `test_us_001_review_ui_api.py`: trusted load, evidence seek contract, If-Match, conflict recovery, unsupported blocker.
+4. `test_us_002_speaker_ui_api.py`: scopes, ambiguity, stale rollback, reapproval activity.
+5. `test_us_003_share_policy.py`: both share routes, strict failure, compatibility, immutable public snapshot.
+6. `test_us_007_artifact_hooks.py`: all eight artifact kinds, replay, failure reservation, tenant isolation, cycles.
+7. `test_us_007_deletion_worker.py`: request latency/state, quarantine, leaf order, partial retry, external remediation, receipt verify.
+8. `test_us_008_audit_job.py`: empty/nonempty persisted jobs, mutation, key readiness, download.
+9. `test_us_009_preflight_hooks.py`: transcription/extraction/storage zero-call blocked cases and no fallback.
+10. Playwright specs tagged `US-xxx`; axe per screen; screenshots.
 
-Every criterion is marked `US-xxx-AC-n` in test name/docstring. Existing 23 pure-rule tests remain green.
+Map each story AC to `US-xxx-AC-n` in test IDs/docstrings. No `NotImplementedError` guard-only tests. Route integration uses real SQLite and temp local storage; network uses respx only to prove zero/expected calls.
 
 ### Commands
 
@@ -475,66 +498,69 @@ Every criterion is marked `US-xxx-AC-n` in test name/docstring. Existing 23 pure
 uv sync --frozen
 uv run ruff format --check .
 uv run ruff check .
+uv run pytest tests/test_api_keys.py tests/test_db_models.py tests/test_diarization.py tests/test_google_calendar.py tests/test_review_integration.py tests/test_whisper_stt.py tests/test_batch_transcription.py -q -n 0
 uv run pytest tests/test_us_001* tests/test_us_002* tests/test_us_003* -q -n 0
 uv run pytest tests/test_us_007* tests/test_us_008* tests/test_us_009* -q -n 0
 uv run pytest -q -n 0
-uv run pytest --cov=meeting_notes_ai.services.evidence --cov=meeting_notes_ai.services.review --cov=meeting_notes_ai.services.governance --cov=meeting_notes_ai.routes.trusted_records --cov=meeting_notes_ai.routes.governance --cov-report=term-missing -q -n 0
+uv run pytest --cov=meeting_notes_ai.services.trusted_records --cov=meeting_notes_ai.services.share_policy --cov=meeting_notes_ai.services.governance --cov=meeting_notes_ai.routes.trusted_records --cov=meeting_notes_ai.routes.governance --cov-report=term-missing -q -n 0
 cd frontend && npm ci
 cd frontend && npm run typecheck
 cd frontend && npm run build
 cd frontend && npx playwright install --with-deps chromium
 cd frontend && npm run test:e2e
 cd frontend && npm run test:a11y
+cd frontend && npm run screenshots
 ```
 
-Startup against disposable DB: set `DATABASE_URL=sqlite+aiosqlite:////tmp/meeting-notes-plan.db`, run Alembic upgrade head, start Uvicorn, require `/healthz` and readiness 200, then delete DB. Changed/new backend modules ≥90% statement coverage. Full suite 0 failures/errors. UI build/typecheck zero errors; all E2E green; axe zero serious/critical.
+Fresh disposable database: Alembic upgrade head, worker one-shot, Uvicorn startup, `/healthz`, readiness, OpenAPI, actual authenticated happy path. Objective: 0 full-suite failures/errors, changed/new backend ≥90%, E2E 0 failures, axe zero serious/critical, screenshot manifest contains all required states.
 
 ## Documentation Deliverables
 
-- README: complete trusted review and governance flows, config, migration, endpoints, screenshots/limitations, troubleshooting.
-- CHANGELOG: next version 1.4.1, accurately list completed persistence/API/UI/regression fixes.
-- `docs/TRUSTED_RECORDS.md`: schemas, concurrency, blockers, snapshots, examples.
-- `docs/DATA_GOVERNANCE.md`: artifacts, policies, deletion, receipts, audit verification.
-- `docs/GUI_SPECIFICATION.md`: routes, layouts, states, responsive/accessibility evidence.
-- `FEATURES-DONE.md`: list only fully integrated completed items.
-- `development-report.md`: exact RED/GREEN commands, full counts, coverage, screenshots, gates, migration/startup, git hashes, blockers.
+- README: trusted review/share and governance worker flows, config, migration, commands, troubleshooting.
+- CHANGELOG next patch version: enforcement, UI, regression fixes, tests, docs.
+- `docs/TRUSTED_RECORDS.md`: review UI, concurrency, snapshot sharing.
+- `docs/DATA_GOVERNANCE.md`: registry hooks, worker, quarantine, receipts, exports, policies.
+- `docs/GUI_SPECIFICATION.md`: exact screens/states/responsive/accessibility.
+- `FEATURES-DONE.md`: only fully complete, test-backed items.
+- `development-report.md`: exact RED/GREEN, full counts, coverage, gates, startup, screenshots/index, git hashes, blockers.
 
 ## Expected File Changes
 
-Add corrective migration, persistent repositories/job/receipt modules, trusted/governance routes, frontend API clients, Meeting Activity/Data components, Playwright config/specs, screenshots as intentional report assets, and route/integration tests. Modify ORM, main router wiring, storage/extraction/export/sharing/webhook/PM hooks, Review/Compliance/Settings/Dashboard UI, styles, lockfiles, CI, README, CHANGELOG, docs, FEATURES-DONE, development report. Do not modify research findings.
+Add migration 0008, trusted/share orchestration services, governance repository/jobs/receipts, worker package, MeetingActivity and MeetingData components, shared UI primitives, Playwright/axe config/specs, intentional screenshot assets, hook/worker/share/UI tests. Modify share/storage/export/webhook/PM/transcription/extraction services, models, trusted/governance routes, ReviewWorkspace, ComplianceCenter, Dashboard/Settings, styles, package locks, CI, docs, reports. Preserve research findings.
 
 ## Traceability Matrix
 
 | Research need | Research evidence | User story id | Planned requirement | Acceptance criterion | Planned implementation location | Planned test evidence | Priority |
 |---|---|---|---|---|---|---|---|
-| Verify every claim | Accuracy distrust | US-001 | Persistent claims/evidence/review UI | All strict published claims grounded; seek ≤1 s | evidence/review services/routes, Review | US-001 route + E2E | P0 |
-| Correct attribution | Speaker misassignment | US-002 | Transactional versioned mapping | Atomic; stale/ambiguous fails; reapproval | review service, Transcript | US-002 DB + E2E | P0 |
-| Prevent unsafe sharing | Sensitive record risk | US-003 | Policy, decisions, snapshots, share hook | Strict share cannot bypass publish | review/trusted routes/sharing | US-003 integration + E2E | P0 |
-| See derivative copies | Data spread | US-007 | Registry hooks and lineage UI | Every derivative registered once, tenant-safe | governance repository/hooks, Data | US-007 integration | P0 |
-| Delete verifiably | Retention/privacy | US-007 | Quarantine worker and receipt | Internal inaccessible ≤60 s; honest external state | deletion/jobs/receipts | US-007 job + E2E | P0 |
-| Prove audit integrity | Security procurement | US-008 | DB chain/export API/UI | Mutation detected; signed empty/nonempty ZIP | audit service/routes, Audit | US-008 real ZIP + E2E | P1 |
-| Enforce boundaries | Provider/data sovereignty | US-009 | Policy persistence/preflight/UI | Blocked provider yields zero calls/no fallback | policies/hooks, Policy | US-009 mocked-network integration | P0 |
+| Verify claims | Accuracy distrust | US-001 | Real trusted Review UI | Grounded publish; seek ≤1 s; conflict no loss | trusted service/routes, Review | US-001 API/E2E | P0 |
+| Correct speakers | Misattribution | US-002 | Mapping UI and activity | Atomic scopes; ambiguity/stale rollback | trusted service, Transcript/Activity | US-002 DB/E2E | P0 |
+| Safe sharing | Sensitive records | US-003 | Shared policy gate + immutable snapshot | No strict token without eligible snapshot | share policy/routes/public | US-003 integration/E2E | P0 |
+| See derivatives | Data spreads | US-007 | Hooks and lineage Data screen | All planned kinds once, tenant-safe, acyclic | registry/hooks/Data | US-007 integration/E2E | P0 |
+| Delete verifiably | Retention/privacy | US-007 | Durable worker/quarantine/receipt | Request async; retry idempotent; verify signature | jobs/receipts/Data | US-007 worker/E2E | P0 |
+| Audit evidence | Procurement/security | US-008 | Persisted export job/UI | Valid empty/nonempty ZIP; mutation blocked | audit jobs/routes/UI | US-008 I/O/E2E | P1 |
+| Data boundaries | Privacy/local demand | US-009 | Editable policy + preflight hooks | Blocked provider zero calls/no fallback | policy hooks/UI | US-009 network/E2E | P0 |
 
 ## Risks and Mitigations
 
-Migration mismatch: add corrective migration and ORM parity test. Existing test failures: clean frozen install, isolate globals/import order, no xfail masking. Legacy data: lazy idempotent projection and explicit unverified label. External deletion: remediation state only. Job restart: persisted state and idempotent worker. Concurrency: ETag/version, unique keys and transactions. UI scope: extend existing screens, no rewrite. Key loss: readiness and documented rotation limitations. Git/gates absent: attempt and report exact blocker; never fabricate.
+Regression breadth: fix by isolated groups first, no assertion weakening. Workflow coupling: central share/policy/registry services. Job reliability: persisted idempotent states and one-shot worker tests. Migration risk: upgrade/downgrade/ORM parity. Legacy meetings: explicit compatibility/unverified states. External deletion: remediation only. UI scope: reuse shell/primitives. Screenshot privacy: synthetic fixtures only. Missing lab/git environment: attempt and report, never fabricate.
 
 ## Definition of Done
 
-- [ ] Both selected features work end to end with no facade or placeholder controls.
-- [ ] Six stories and every AC have named test evidence.
-- [ ] Persistent Review → evidence → mapping → approval → publish → share passes E2E.
-- [ ] Persistent lineage → delete → retry/remediation → signed receipt passes E2E.
-- [ ] Audit and policy UI use real APIs and pass success/error/empty flows.
-- [ ] Complete corrective migration fresh/upgrade/downgrade and ORM parity pass.
-- [ ] `uv sync --frozen` succeeds without ad-hoc packages.
+- [ ] Two selected features complete end to end; no placeholder controls or synchronous fake jobs.
+- [ ] Six stories and every AC mapped to named passing tests.
+- [ ] Review → evidence → mapping → approve → publish → gated share passes authenticated E2E.
+- [ ] Lineage → quarantine → worker → partial retry/remediation → signed receipt passes E2E.
+- [ ] Audit jobs and editable policies use real APIs and pass empty/error/success flows.
+- [ ] All eight artifact hooks and three provider preflight boundaries covered.
+- [ ] Migration 0008 fresh/upgrade/downgrade/ORM parity passes.
+- [ ] `uv sync --frozen` succeeds from clean environment.
 - [ ] Full `uv run pytest -q -n 0` has 0 failures/errors.
-- [ ] Changed/new backend coverage ≥90%.
-- [ ] Ruff format/check, frontend typecheck/build, Uvicorn startup, health/readiness pass.
-- [ ] Playwright Chromium and axe pass; screenshots inspected for desktop/mobile main, empty, error, success states.
-- [ ] Tenant isolation, secret scanning, content-redaction, policy zero-call tests pass.
-- [ ] README, CHANGELOG, trusted/governance/API/GUI docs, FEATURES-DONE, development-report match reality.
-- [ ] Lab gates `tdd-gate-v3.sh`, `bdd-gate.sh`, `security-gate.sh`, `doc-sync-check.sh`, `ui-gate.sh` pass when supplied; absent scripts explicitly blocked.
-- [ ] No secrets, caches, temporary DBs, node_modules, dist or coverage artifacts committed.
-- [ ] Git add/commit/pull-rebase/push attempted; clean tree; `git-push-verify.sh` passes with valid remote, otherwise exact blocker documented.
-- [ ] Complete project ZIP preserves top-level layout and passes integrity/list/extract/required-file verification.
+- [ ] Changed/new backend modules ≥90% statement coverage.
+- [ ] Ruff format/check, frontend typecheck/build, Uvicorn, worker, health/readiness/OpenAPI pass.
+- [ ] Playwright and axe pass; screenshots inspected and indexed for required desktop/mobile states.
+- [ ] Tenant isolation, secret scan, redaction, signature mutation, zero-call policy tests pass.
+- [ ] README, CHANGELOG, API/governance/GUI docs, FEATURES-DONE, development-report match actual behavior.
+- [ ] Lab gates `tdd-gate-v3.sh`, `bdd-gate.sh`, `security-gate.sh`, `doc-sync-check.sh`, `ui-gate.sh` pass when supplied; absence explicitly blocked.
+- [ ] No secrets, caches, temp DBs, node_modules, dist, coverage or nonintentional generated files.
+- [ ] Git add/commit/pull-rebase/push attempted; clean tree; `git-push-verify.sh` passes with valid remote or exact external blocker recorded.
+- [ ] Complete project ZIP integrity/list/extract/required-file/top-level checks pass.

@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.4.2] — 2026-08-13
+
+### Added
+- Snapshot-policy gate for persistent share creation.
+- Quarantine-first, idempotent deletion worker and tamper-detecting signed receipts.
+- Meeting Activity and Data workspace views with lineage and deletion request flows.
+- Migration 0008 for snapshot-linked shares, quarantine, artifact state, and job receipts.
+
+### Tests
+- Added share-policy and receipt-mutation tests; 32 selected trusted/governance tests pass.
+
+
 ## [1.4.1] — 2026-08-13
 
 ### Added
