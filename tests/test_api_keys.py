@@ -489,15 +489,25 @@ class TestApiKeyBehavioral:
             assert "key_prefix" in item
 
     def test_list_api_keys_empty(self, client, valid_token):
-        """GET /api-keys for user with no keys returns empty list."""
-        response = client.get(
-            "/api/v1/api-keys",
-            headers={"Authorization": f"Bearer {valid_token}"},
-        )
+        """GET /api-keys returns empty after the user's keys are deactivated.
+
+        The behavioral class intentionally shares its database fixture, so this
+        test first removes keys created by earlier CRUD scenarios through the
+        public API instead of depending on method execution order.
+        """
+        headers = {"Authorization": f"Bearer {valid_token}"}
+        existing = client.get("/api/v1/api-keys", headers=headers)
+        assert existing.status_code == 200
+        payload = existing.json()
+        for item in payload if isinstance(payload, list) else payload.get("api_keys", []):
+            deleted = client.delete(f"/api/v1/api-keys/{item['id']}", headers=headers)
+            assert deleted.status_code == 204
+
+        response = client.get("/api/v1/api-keys", headers=headers)
         assert response.status_code == 200
         data = response.json()
         keys = data if isinstance(data, list) else data.get("api_keys", [])
-        assert len(keys) == 0
+        assert keys == []
 
     # ── DELETE /api/v1/api-keys/{key_id} ──────────────────────────────────
 
