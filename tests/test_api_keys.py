@@ -382,7 +382,6 @@ class TestApiKeyBehavioral:
 
     # ── POST /api/v1/api-keys ─────────────────────────────────────────────
 
-    @pytest.mark.xfail(strict=True, reason="Not yet implemented — RED phase")
     def test_create_api_key_requires_auth(self, client):
         """POST /api-keys returns 401 without auth token."""
         response = client.post("/api/v1/api-keys", json={"name": "My Key"})
@@ -390,7 +389,6 @@ class TestApiKeyBehavioral:
             f"Expected 401, got {response.status_code}: {response.text}"
         )
 
-    @pytest.mark.xfail(strict=True, reason="Not yet implemented — RED phase")
     def test_create_api_key_success(self, client, valid_token):
         """POST /api-keys returns 201 with full key in response."""
         response = client.post(
@@ -409,7 +407,6 @@ class TestApiKeyBehavioral:
         # key_prefix should match the first 8 chars of the full key
         assert data["key"][:8] == data["key_prefix"]
 
-    @pytest.mark.xfail(strict=True, reason="Not yet implemented — RED phase")
     def test_create_api_key_returns_full_key_once(self, client, valid_token):
         """The full key is returned in the response (shown only at creation)."""
         response = client.post(
@@ -423,7 +420,6 @@ class TestApiKeyBehavioral:
         # The key should look like a URL-safe base64 token
         assert data["key"].replace("-", "").replace("_", "").isalnum()
 
-    @pytest.mark.xfail(strict=True, reason="Not yet implemented — RED phase")
     def test_create_api_key_without_name(self, client, valid_token):
         """POST /api-keys without name still works (name is optional)."""
         response = client.post(
@@ -439,7 +435,6 @@ class TestApiKeyBehavioral:
 
     # ── GET /api/v1/api-keys ──────────────────────────────────────────────
 
-    @pytest.mark.xfail(strict=True, reason="Not yet implemented — RED phase")
     def test_list_api_keys_requires_auth(self, client):
         """GET /api-keys returns 401 without auth token."""
         response = client.get("/api/v1/api-keys")
@@ -447,7 +442,6 @@ class TestApiKeyBehavioral:
             f"Expected 401, got {response.status_code}: {response.text}"
         )
 
-    @pytest.mark.xfail(strict=True, reason="Not yet implemented — RED phase")
     def test_list_api_keys_success(self, client, valid_token):
         """GET /api-keys returns list of keys with prefix only."""
         response = client.get(
@@ -467,7 +461,6 @@ class TestApiKeyBehavioral:
             pytest.fail(f"Unexpected response shape: {data}")
         assert isinstance(keys, list)
 
-    @pytest.mark.xfail(strict=True, reason="Not yet implemented — RED phase")
     def test_list_api_keys_shows_prefix_not_full_key(self, client, valid_token):
         """List response shows key_prefix, NOT the full key."""
         # First create a key
@@ -495,21 +488,29 @@ class TestApiKeyBehavioral:
             # But key_prefix should be visible
             assert "key_prefix" in item
 
-    @pytest.mark.xfail(strict=True, reason="Not yet implemented — RED phase")
     def test_list_api_keys_empty(self, client, valid_token):
-        """GET /api-keys for user with no keys returns empty list."""
-        response = client.get(
-            "/api/v1/api-keys",
-            headers={"Authorization": f"Bearer {valid_token}"},
-        )
+        """GET /api-keys returns empty after the user's keys are deactivated.
+
+        The behavioral class intentionally shares its database fixture, so this
+        test first removes keys created by earlier CRUD scenarios through the
+        public API instead of depending on method execution order.
+        """
+        headers = {"Authorization": f"Bearer {valid_token}"}
+        existing = client.get("/api/v1/api-keys", headers=headers)
+        assert existing.status_code == 200
+        payload = existing.json()
+        for item in payload if isinstance(payload, list) else payload.get("api_keys", []):
+            deleted = client.delete(f"/api/v1/api-keys/{item['id']}", headers=headers)
+            assert deleted.status_code == 204
+
+        response = client.get("/api/v1/api-keys", headers=headers)
         assert response.status_code == 200
         data = response.json()
         keys = data if isinstance(data, list) else data.get("api_keys", [])
-        assert len(keys) == 0
+        assert keys == []
 
     # ── DELETE /api/v1/api-keys/{key_id} ──────────────────────────────────
 
-    @pytest.mark.xfail(strict=True, reason="Not yet implemented — RED phase")
     def test_delete_api_key_requires_auth(self, client):
         """DELETE /api-keys/{id} returns 401 without auth token."""
         response = client.delete("/api/v1/api-keys/test-key-id")
@@ -517,7 +518,6 @@ class TestApiKeyBehavioral:
             f"Expected 401, got {response.status_code}: {response.text}"
         )
 
-    @pytest.mark.xfail(strict=True, reason="Not yet implemented — RED phase")
     def test_delete_api_key_sets_inactive(self, client, valid_token):
         """DELETE /api-keys/{id} soft-deletes (sets is_active=False)."""
         # Create a key first
@@ -551,7 +551,6 @@ class TestApiKeyBehavioral:
             if k.get("id") == key_data["id"]:
                 assert k.get("is_active") is False, "Deleted key should have is_active=False"
 
-    @pytest.mark.xfail(strict=True, reason="Not yet implemented — RED phase")
     def test_delete_api_key_not_found(self, client, valid_token):
         """DELETE /api-keys/{id} for unknown key returns 404."""
         response = client.delete(
@@ -560,7 +559,6 @@ class TestApiKeyBehavioral:
         )
         assert response.status_code == 404, f"Expected 404, got {response.status_code}"
 
-    @pytest.mark.xfail(strict=True, reason="Not yet implemented — RED phase")
     def test_delete_api_key_forbidden_not_owner(self, client):
         """DELETE /api-keys/{id} by another user returns 403."""
         from meeting_notes_ai.auth import create_access_token

@@ -391,21 +391,20 @@ async def test_inmemory_engine_concurrent_sessions_share_database():
         async with factory() as session_b:
             from sqlalchemy import select
 
-            result = await session_b.execute(
-                select(User).where(User.id == user_id)
-            )
+            result = await session_b.execute(select(User).where(User.id == user_id))
             loaded = result.scalar_one_or_none()
-            assert loaded is not None, (
-                "second concurrent session must share the in-memory database"
-            )
+            assert loaded is not None, "second concurrent session must share the in-memory database"
 
     await close_db(engine)
 
 
 @pytest.mark.asyncio
-async def test_get_db_session_runtime_error_without_init():
+async def test_get_db_session_runtime_error_without_init(monkeypatch):
     """get_db_session raises RuntimeError before factory is set."""
+    import meeting_notes_ai.db.session as session_module
     from meeting_notes_ai.db.session import get_db_session
+
+    monkeypatch.setattr(session_module, "_session_factory", None)
 
     with pytest.raises(RuntimeError, match="not initialized"):
         async for _ in get_db_session():

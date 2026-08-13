@@ -26,6 +26,7 @@ from meeting_notes_ai.routes import (
     api_keys,
     batches,
     google_calendar,
+    governance,
     health,
     hipaa,
     live_transcription,
@@ -36,6 +37,7 @@ from meeting_notes_ai.routes import (
     sharing,
     storage,
     teams,
+    trusted_records,
     webhooks,
     workspace,
 )
@@ -116,3 +118,5 @@ app.include_router(live_transcription.router)
 app.include_router(workspace.router)
 app.include_router(workspace.public_router)
 app.include_router(google_calendar.router)
+app.include_router(trusted_records.router)
+app.include_router(governance.router)

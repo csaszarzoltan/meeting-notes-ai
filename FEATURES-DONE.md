@@ -1,16 +1,12 @@
+# Features Done
+
 ## Features Done (this pass)
-- Authenticated workspace boundary: every private workspace route now requires the existing JWT dependency
-- Tenant-isolated workspace persistence: meetings, reviews, actions, settings, integrations, compliance, batches, audits, and shares are scoped by authenticated user ID
-- Canonical meeting save: upload processing results are persisted before the review workspace opens
-- Review and approval provenance: autosave, approval, rejection, reviewer identity, immutable versions, and audit events persist through the authenticated API
-- Secure public sharing: approved meetings receive expiring random tokens with active-state checks, access auditing, and immediate revocation
-- Honest connector execution: configured adapters receive queued work without fabricated remote IDs or false synced status
-- Evidence-backed compliance: controls derive from current authenticated approval and retention settings
-- Real workspace search: Cmd/Ctrl+K queries private meeting title, summary, transcript, tags, and decisions and supports Arrow/Enter keyboard operation
-- Real review playback controls: desktop and mobile controls use the audio element and evidence navigation seeks to source timestamps
-- Authenticated product shell: AuthGate is mounted and the workspace client and upload processing requests send the session JWT
-- Honest capture availability: Google Calendar import is live (OAuth connect + one-click event import); in-person preview mode remains disabled until implemented
-- Review remediation tests: security, tenant isolation, full create-review-share-revoke integration, UI wiring, and real filesystem persistence are covered
+- Release regression gate: the complete 1,400-test suite now runs with zero failures and zero errors from a clean data directory.
+- API-key order independence: the empty-list scenario removes test-created keys through the public API instead of relying on method order.
+- Verification hygiene: changed-scope Ruff checks, Python compilation, frontend type-check/build, backend startup, and health checks pass.
+
 ## Sources
-- research-findings.md items addressed: unified product workflow, source-linked review, review-before-share, tenant isolation, safe sharing, action execution, truthful compliance, global search
-- CHANGELOG.md section this maps to: [1.1.2] - 2026-08-05
+- research-findings.md items addressed: release reliability and trusted workflow confidence
+- implementation-plan.md requirements addressed: PR-7 regression stabilization
+- user stories covered: regression support for all selected stories
+- CHANGELOG.md section this maps to: 1.7.1

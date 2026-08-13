@@ -50,7 +50,9 @@ def _align(segments, turns):
         best_turn = None
         best_overlap = 0.0
         for start, end, speaker in turns:
-            overlap = max(0.0, min(seg.end, end) - max(seg.start, start))
+            seg_start = seg["start"] if isinstance(seg, dict) else seg.start
+            seg_end = seg["end"] if isinstance(seg, dict) else seg.end
+            overlap = max(0.0, min(seg_end, end) - max(seg_start, start))
             if overlap > best_overlap:
                 best_overlap = overlap
                 best_turn = speaker

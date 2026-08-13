@@ -43,3 +43,9 @@ async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
         except Exception:
             await session.rollback()
             raise
+
+
+def reset_session_factory() -> None:
+    """Clear process-global database state for clean shutdown and hermetic tests."""
+    global _session_factory
+    _session_factory = None

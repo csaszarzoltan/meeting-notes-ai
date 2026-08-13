@@ -1,5 +1,82 @@
 # Changelog
 
+## [1.7.1] — 2026-08-13
+
+### Fixed
+- Removed the final API-key behavioral test order dependency by cleaning up test-created keys through the public API before verifying the empty state.
+- Corrected import ordering in the application router.
+
+### Verification
+- Full regression: 1,400 collected, zero failures, zero errors, six expected xfails.
+- Frontend type-check and production build pass.
+- Backend startup and `/healthz` pass.
+
+
+## [1.6.0] — 2026-08-13
+
+### Added
+- Editable claim cards with transcript-segment evidence selection and removal.
+- Speaker mapping dialog and explicit reapproval state.
+- Optimistic-concurrency recovery with Keep current, Use mine as new revision, and Cancel.
+- Immutable snapshot publication feedback and direct snapshot sharing control.
+- Artifact registration for team snapshots and strict snapshot-backed shares.
+
+### Tests
+- 97 focused trusted, governance, and sharing tests pass.
+- Frontend type-check and production build pass.
+
+
+## [1.5.0] — 2026-08-13
+
+### Added
+- Claim-level trusted review controls connected to approve, reject, publish, evidence seek, and snapshot sharing APIs.
+- Persistent idempotent artifact registry with parent edges and safe failure state.
+- Persisted provider-policy preflight decisions.
+- Standalone restart-safe governance worker CLI.
+
+### Fixed
+- Persistent sharing compatibility tests remain green while strict healthcare/legal meetings require snapshots.
+
+### Tests
+- 33 selected trusted/governance tests passed; full regression reproduced the same 23 pre-existing failure groups.
+
+
+## [1.4.2] — 2026-08-13
+
+### Added
+- Snapshot-policy gate for persistent share creation.
+- Quarantine-first, idempotent deletion worker and tamper-detecting signed receipts.
+- Meeting Activity and Data workspace views with lineage and deletion request flows.
+- Migration 0008 for snapshot-linked shares, quarantine, artifact state, and job receipts.
+
+### Tests
+- Added share-policy and receipt-mutation tests; 32 selected trusted/governance tests pass.
+
+
+## [1.4.1] — 2026-08-13
+
+### Added
+- Persistent trusted-record review, evidence, speaker-mapping, decision, publish, and activity APIs.
+- Governance lineage, deletion job, signed receipt, audit export, and versioned policy APIs.
+- Corrective Alembic migration completing trusted-record governance tables.
+- Functional Compliance Center audit export and policy loading flows.
+
+### Tests
+- Added real SQLite schema and API contract tests; 29 selected tests pass.
+
+
+## [1.4.0] — 2026-08-13
+
+### Added
+- Evidence-grounding validation, atomic speaker mappings, and fail-closed review policy rules.
+- Tenant-scoped artifact lineage, deletion outcome classification, and signed audit-chain exports.
+- Trusted-record SQLAlchemy models and additive Alembic migration.
+- Compliance Center audit and data-policy navigation.
+
+### Tests
+- 18 BDD-derived tests covering US-001, US-002, US-003, US-007, US-008, and US-009.
+
+
 All notable changes to MeetingNotesAI are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
@@ -473,3 +550,19 @@ serves the Chart.js dashboard page unauthenticated.
 - FastAPI application with basic health check endpoint
 - In-memory SQLite test database setup
 - Basic Pydantic models for meetings and transcription
+
+## [1.7.0] — 2026-08-13
+
+### Fixed
+- Added explicit database session-factory reset API for controlled shutdown/testing.
+- Corrected diarization reference coverage for dictionary-backed transcript segments.
+- Removed obsolete strict xfail markers from completed API-key behavior tests.
+- Made local-transcription import-isolation tests portable across checkout locations.
+- Made async persistence tests avoid nested `asyncio.run` calls.
+- Made Calendar connection-state test independent of an expired fixed timestamp.
+
+### Verification
+- API-key, database-session, and diarization group: 89 passed plus 12 pre-existing non-strict xfails.
+- Batch, Calendar, review-integration, and local transcription group: 137 passed.
+- Sharing/storage/local/UI isolated regression group: 125 passed.
+- Full regression still exposes cross-module test-database schema contamination and is not green.

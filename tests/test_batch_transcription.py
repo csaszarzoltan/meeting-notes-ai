@@ -51,9 +51,7 @@ class _FakeTranscription:
             language=language or "en",
             duration_seconds=3.0,
             segments=[
-                TranscriptSegment(
-                    start=0.0, end=3.0, text="batch transcription of uploaded audio"
-                )
+                TranscriptSegment(start=0.0, end=3.0, text="batch transcription of uploaded audio")
             ],
         )
 
@@ -398,7 +396,7 @@ class TestBatchTranscribeFile:
             user_id="test-user-id",
             mode="healthcare",
         )
-        row = _fetch_meeting(result.meeting_id)
+        row = await asyncio.to_thread(_fetch_meeting, result.meeting_id)
         assert row is not None
         assert row.mode == "healthcare", (
             f"meeting mode must be persisted (healthcare), got {row.mode!r}"

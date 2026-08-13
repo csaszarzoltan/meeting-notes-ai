@@ -199,6 +199,9 @@ async def create_share_link(
 ) -> ShareResponse:
     """Generate a share link for a meeting."""
     meeting = await _verify_meeting_access(meeting_id, user, db, require_write=True)
+    from meeting_notes_ai.services.share_policy import eligible_snapshot
+
+    snapshot = await eligible_snapshot(db, meeting)
 
     token = secrets.token_urlsafe(32)
     expires_at = _compute_expires_at(request.expires_in)
@@ -209,9 +212,23 @@ async def create_share_link(
         created_by=user["user_id"],
         token=token,
         expires_at=expires_at,
+        snapshot_id=snapshot.id if snapshot else None,
+        policy_version_id=snapshot.policy_version_id if snapshot else None,
     )
     db.add(share)
     await db.flush()
+    if snapshot is not None and meeting.team_id:
+        from meeting_notes_ai.services.governance.repository import ArtifactRegistry
+
+        await ArtifactRegistry(db).register(
+            team_id=meeting.team_id,
+            meeting_id=meeting.id,
+            kind="share",
+            source_key=f"share:{share.id}",
+            location_class="database",
+            policy_version_id=share.policy_version_id,
+            relation_type="shared_as",
+        )
 
     return ShareResponse(
         id=share.id,

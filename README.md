@@ -1,4 +1,4 @@
-# MeetingNotesAI 1.1.2
+# MeetingNotesAI 1.7.1
 
 MeetingNotesAI is a privacy-first FastAPI and React workspace that turns uploaded or live conversations into **reviewable evidence, approved notes, accountable actions, and controlled shares**.
 
@@ -80,3 +80,34 @@ See `TEST_RESULTS.md`, `review-findings.md`, `FEATURES-DONE.md`, and `docs/WORKS
 - [Specifikációk](docs/specs/) — feature-ök kanonikus követelményei
 
 - [Módszertan](docs/METHODOLOGY.md) — a lab fejlesztési módszertana (kötelező olvasmány)
+
+## Trusted meeting records
+Version 1.4.0 introduces evidence validation, atomic speaker correction rules, strict review-policy evaluation, tenant-scoped artifact lineage, honest external-remediation outcomes, and tamper-evident signed audit exports. The Compliance Center exposes Overview, Audit exports, and Data policies tabs. AI output remains a draft until the configured approval criteria are met.
+
+### Verification
+Run `uv run pytest -q -n 0`, `uv run ruff check .`, and in `frontend/`, run `npm ci`, `npm run typecheck`, and `npm run build`.
+
+## Trusted-record and governance APIs
+
+Version 1.4.1 adds persistent trusted-record endpoints under `/api/v1/trusted` for record retrieval, optimistic claim edits, speaker mapping, decisions, publishing, and activity. Governance endpoints under `/api/v1/governance` provide lineage, deletion jobs and receipts, signed audit exports, and versioned policies. Claim edits require `If-Match`; strict healthcare/legal publishing fails closed when evidence or approval is missing. Set `AUDIT_EXPORT_SIGNING_KEY` to at least 32 bytes before downloading receipts or exports.
+
+## Trusted workflow enforcement
+
+Version 1.4.2 adds snapshot gating to persistent share creation, quarantines meetings when deletion is requested, and moves destructive work into an idempotent deletion worker service. The meeting review workspace now includes Activity and Data tabs backed by trusted/governance APIs. Deletion receipts use canonical HMAC signatures and detect content modification. Set `AUDIT_EXPORT_SIGNING_KEY` to at least 32 bytes before worker execution when signed receipts are required.
+
+## Trusted workflow completion foundations
+Version 1.5.0 connects claim-level approve/reject/publish actions to the trusted-record API, displays immutable snapshots, adds a persistent idempotent ArtifactRegistry, persists provider preflight decisions, and provides a standalone governance worker:
+
+```bash
+python -m meeting_notes_ai.workers.governance --once
+python -m meeting_notes_ai.workers.governance --interval 5
+```
+
+The worker claims pending deletion jobs, skips terminal artifact results after restart, preserves external remediation, revokes shares, and creates signed receipts when `AUDIT_EXPORT_SIGNING_KEY` contains at least 32 bytes.
+
+## Complete trusted review interaction
+
+Version 1.6.0 completes the central claim-review interaction: users can edit claim text, select transcript segments, add or remove evidence, approve or reject each claim, map speakers, see `Reapproval required`, publish immutable snapshots, and resolve optimistic-concurrency conflicts with `Keep current`, `Use mine as new revision`, or `Cancel`.
+
+Published snapshots and snapshot-backed shares are registered in the artifact registry for team meetings. Strict healthcare and legal meetings continue to fail closed when no eligible snapshot exists.
+>>>>>>> e181cbe070d9f8d035112a414a1fde99526bfb68
