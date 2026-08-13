@@ -1,5 +1,34 @@
 # Changelog
 
+## [1.6.0] — 2026-08-13
+
+### Added
+- Editable claim cards with transcript-segment evidence selection and removal.
+- Speaker mapping dialog and explicit reapproval state.
+- Optimistic-concurrency recovery with Keep current, Use mine as new revision, and Cancel.
+- Immutable snapshot publication feedback and direct snapshot sharing control.
+- Artifact registration for team snapshots and strict snapshot-backed shares.
+
+### Tests
+- 97 focused trusted, governance, and sharing tests pass.
+- Frontend type-check and production build pass.
+
+
+## [1.5.0] — 2026-08-13
+
+### Added
+- Claim-level trusted review controls connected to approve, reject, publish, evidence seek, and snapshot sharing APIs.
+- Persistent idempotent artifact registry with parent edges and safe failure state.
+- Persisted provider-policy preflight decisions.
+- Standalone restart-safe governance worker CLI.
+
+### Fixed
+- Persistent sharing compatibility tests remain green while strict healthcare/legal meetings require snapshots.
+
+### Tests
+- 33 selected trusted/governance tests passed; full regression reproduced the same 23 pre-existing failure groups.
+
+
 ## [1.4.2] — 2026-08-13
 
 ### Added

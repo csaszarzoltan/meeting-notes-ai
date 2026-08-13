@@ -13,6 +13,9 @@ from meeting_notes_ai.db.models import Meeting, PolicyVersion, PublishedSnapshot
 
 async def eligible_snapshot(db: AsyncSession, meeting: Meeting) -> PublishedSnapshot | None:
     policy = None
+    strict = meeting.mode in {"healthcare", "legal"}
+    if not strict:
+        return None
     if meeting.team_id:
         policy = (
             (
@@ -25,7 +28,6 @@ async def eligible_snapshot(db: AsyncSession, meeting: Meeting) -> PublishedSnap
             .scalars()
             .first()
         )
-    strict = meeting.mode in {"healthcare", "legal"}
     if policy:
         try:
             approval = json.loads(policy.approval_json or "{}")

@@ -396,6 +396,18 @@ async def publish(
     )
     db.add(snap)
     await db.flush()
+    if m.team_id:
+        from meeting_notes_ai.services.governance.repository import ArtifactRegistry
+
+        await ArtifactRegistry(db).register(
+            team_id=m.team_id,
+            meeting_id=m.id,
+            kind="published_snapshot",
+            source_key=f"snapshot:{m.id}:{version}",
+            location_class="database",
+            content=payload.encode(),
+            policy_version_id=snap.policy_version_id,
+        )
     return {"snapshot_id": snap.id, "version": version, "sha256": digest}
 
 

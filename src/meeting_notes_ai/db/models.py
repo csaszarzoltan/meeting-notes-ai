@@ -88,12 +88,6 @@ class User(Base, TimestampMixin):
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
     display_name: Mapped[str] = mapped_column(String(100), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    snapshot_id: Mapped[Optional[str]] = mapped_column(
-        ForeignKey("published_snapshots.id"), nullable=True
-    )
-    policy_version_id: Mapped[Optional[str]] = mapped_column(
-        ForeignKey("policy_versions.id"), nullable=True
-    )
     tier: Mapped[str] = mapped_column(String(20), default="free", nullable=False)
 
     # Relationships
@@ -234,6 +228,12 @@ class SharedLink(Base, TimestampMixin):
     token: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    snapshot_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("published_snapshots.id"), nullable=True
+    )
+    policy_version_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("policy_versions.id"), nullable=True
+    )
 
     # Relationships
     meeting: Mapped["Meeting"] = relationship(back_populates="shared_links")

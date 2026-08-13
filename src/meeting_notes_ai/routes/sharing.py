@@ -217,6 +217,18 @@ async def create_share_link(
     )
     db.add(share)
     await db.flush()
+    if snapshot is not None and meeting.team_id:
+        from meeting_notes_ai.services.governance.repository import ArtifactRegistry
+
+        await ArtifactRegistry(db).register(
+            team_id=meeting.team_id,
+            meeting_id=meeting.id,
+            kind="share",
+            source_key=f"share:{share.id}",
+            location_class="database",
+            policy_version_id=share.policy_version_id,
+            relation_type="shared_as",
+        )
 
     return ShareResponse(
         id=share.id,

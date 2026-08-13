@@ -1,77 +1,76 @@
 # Development Report
 
 ## Implemented Scope
-Implemented snapshot-gated persistent sharing, schema support for snapshot-linked shares and quarantine, quarantine-first deletion requests, an idempotent deletion worker, canonical signed-receipt verification, and Activity/Data meeting views backed by trusted and governance APIs.
+Completed the central Review → Publish → Share interaction for the persistent trusted-record path. Added claim editing, transcript evidence selection/removal, claim decisions, speaker mapping, reapproval state, optimistic conflict recovery, immutable publication feedback, direct snapshot sharing, and snapshot/share artifact hooks.
 
 ## Research Items Addressed
-Evidence-grounded sharing, immutable publication, derivative visibility, asynchronous deletion, honest external-remediation state, and verifiable deletion receipts.
+Evidence-grounded review, speaker attribution correction, strict immutable sharing, and derivative lineage.
 
 ## Plan Requirements Completed
-PR-3 snapshot gating and PR-5 quarantine/worker/receipt foundations are complete for the persistent database path. Activity and Data portions of PR-1/PR-2 are implemented. PR-4 comprehensive artifact hooks, PR-6 asynchronous audit jobs/editable policies, and PR-7 regression stabilization remain incomplete.
+Completed the interactive core of PR-1, PR-2, persistent PR-3, and snapshot/share portions of PR-4. The earlier project foundations for worker, receipts, registry, and provider preflight remain. Legacy JSON sharing unification, all artifact/provider hooks, regression stabilization, Playwright/axe, and desktop capture remain incomplete.
 
 ## User Stories Covered
-- US-001: evidence rules remain PASS; complete trusted Review UI remains PARTIAL.
-- US-002: mapping rules remain PASS; Activity screen PASS; full speaker-mapping UI PARTIAL.
-- US-003: persistent strict share snapshot gate PASS; legacy JSON workspace share path PARTIAL.
-- US-007: quarantine request, worker, remediation outcomes, receipt mutation detection, and Data view PASS; all derivative hooks PARTIAL.
-- US-008: existing audit-chain tests PASS; asynchronous export jobs PARTIAL.
-- US-009: existing provider rules PASS; universal preflight hooks PARTIAL.
+- US-001: PASS for text editing, evidence selection/removal, decision, publication, seek, and conflict recovery.
+- US-002: PASS for the persistent speaker-mapping interaction and explicit reapproval display; multi-segment scope UI remains limited to selected single segment.
+- US-003: PASS for persistent strict snapshot-gated sharing; legacy JSON sharing remains PARTIAL.
+- US-007: PARTIAL, snapshot/share hooks added; all other derivative hooks remain outstanding.
+- US-008: unchanged existing audit behavior.
+- US-009: unchanged preflight foundation; all call-site enforcement remains PARTIAL.
 
 ## Architecture Decisions
-Added a central `eligible_snapshot` service and kept compatibility behavior for general meetings. Added migration 0008 rather than rewriting migration history. Deletion requests now persist pending state and quarantine metadata; destructive work is isolated in `run_deletion_job`. Receipts use canonical JSON plus HMAC-SHA256 and `compare_digest`. Existing React/CSS conventions were retained.
+Kept the trusted REST API as the source of truth. Added typed frontend API operations and a dedicated conflict exception. Local drafts preserve text/evidence during 409 recovery. Snapshot and strict share routes call ArtifactRegistry only for team-owned persistent records, avoiding compatibility-path regressions.
 
 ## UI and UX Implementation
-Added Meeting Activity and Meeting Data components with loading, empty, warning, error/retry, exact-title confirmation, and job-state feedback. Integrated Activity/Data tabs into ReviewWorkspace. Frontend type-check and production build passed with 59 transformed modules. Browser screenshots, Playwright, and axe were not completed, so browser-inspected visual quality is not claimed.
+TrustedClaims now contains the Review workflow, transcript segment selector, evidence chips, claim edit mode, speaker dialog, conflict dialog, blocker/error messaging, immutable snapshot banner, and Share snapshot CTA. Responsive styles support stacked mobile dialogs and transcript cards. Frontend type-check and production build passed. Automated browser screenshots were not produced, so visual quality is not claimed as browser-inspected.
 
 ## TDD Evidence
-RED gaps were the absence of snapshot gating, signed receipt mutation detection, and asynchronous deletion state. Added `test_us_003_share_policy.py` and `test_us_007_receipts.py`; final selected GREEN command ran 32 tests with 32 passed and 0 failed.
+Existing BDD-derived tests remained the backend contract. Focused final command covered sharing, policy, registry, evidence, speaker mapping, review policy, deletion, receipts, audit, and provider rules: 97 passed, 0 failed.
 
 ## Tests and Coverage
-- Selected trusted/governance suite: 32 passed, 0 failed.
-- Coverage measured for newly introduced share-policy and receipt modules: 74% total (38 statements, 10 missed). `jobs.py` was not imported by the coverage run. The 90% target was not met and is reported as a blocker.
-- The prior input report established 1,396 collected tests and 23 repeatable pre-existing failures. A full-suite rerun was not completed in this time-bounded pass; no claim of regression green is made.
-- Integration: Uvicorn startup and `/healthz` returned 200 after installing already-declared Google dependencies into the verification environment.
+- Focused trusted/governance/sharing suite: 97 passed, 0 failed.
+- Frontend type-check: PASS.
+- Frontend build: PASS, 61 modules transformed.
+- Full regression was not rerun in this pass. The input project documented 1,400 collected tests with 23 known failures. No full-suite-green claim is made.
+- Coverage was not remeasured after the UI changes; the prior project report recorded 78% for selected new backend modules.
 
 ## Lab Quality Gates
-- `tdd-gate-v3.sh`: BLOCKED, script not supplied.
-- `bdd-gate.sh`: BLOCKED, script not supplied.
-- `security-gate.sh`: BLOCKED, script not supplied.
-- `doc-sync-check.sh`: BLOCKED, script not supplied.
-- `ui-gate.sh`: BLOCKED, script not supplied.
+- tdd-gate-v3.sh: BLOCKED, not supplied.
+- bdd-gate.sh: BLOCKED, not supplied.
+- security-gate.sh: BLOCKED, not supplied.
+- doc-sync-check.sh: BLOCKED, not supplied.
+- ui-gate.sh: BLOCKED, not supplied.
 
 ## Lint, Formatting, Type-Check, Build, and Startup Results
-- Changed-scope Ruff lint: PASS after six automatic fixes.
-- Changed-scope Ruff format check: PASS.
-- Python compileall: PASS.
+- Changed Python formatting: PASS.
+- Focused backend tests: PASS.
 - Frontend type-check: PASS.
-- Frontend build: PASS, 59 modules transformed.
-- Startup/health integration: PASS, HTTP 200, version 1.4.1 at verification time before version metadata was raised to 1.4.2.
-- E2E/accessibility/screenshots: BLOCKED, not implemented.
+- Frontend production build: PASS.
+- Startup was not rerun during this pass; the input project had a verified healthy 1.5.0 startup.
+- Playwright, axe, E2E, and screenshots: BLOCKED, not implemented.
 
 ## Files Added
-Migration 0008; share policy service; governance jobs and receipts services; Activity and Data UI components; share-policy and receipt tests.
+No new top-level modules; existing trusted frontend/API and registry services were completed.
 
 ## Files Modified
-ORM models, persistent sharing route, governance route, ReviewWorkspace, CSS, version metadata, README, CHANGELOG, trusted/governance docs, FEATURES-DONE, and this report.
+Trusted frontend API, TrustedClaims, styles, trusted publish route, sharing route, README, CHANGELOG, FEATURES-DONE, version metadata, and this report.
 
 ## Deferred or Blocked Items
-Legacy JSON workspace share gating; all eight artifact hook integrations; provider preflight at transcription/extraction/storage; asynchronous audit-export worker; editable policy UI; complete claim/speaker Review UI; Playwright/axe/screenshots; 90% new-module coverage; full regression stabilization; lab gates; git push.
+Legacy JSON share unification, public immutable snapshot resolver for legacy shares, remaining artifact hooks, provider preflight at every outbound call, worker lease/backoff/health, 23 regression failures, browser E2E/accessibility/screenshots, desktop capture, lab gates, and Git push.
 
 ## Known Limitations
-Deletion worker has a deterministic service entrypoint but no long-running worker CLI in this pass. Retry endpoint performs the worker call synchronously. Receipt generation requires a 32-byte environment key. Activity/Data are integrated into the existing mobile-tab structure rather than a new route hierarchy.
+Speaker mapping dialog currently maps the selected segment rather than offering all planned scopes. Conflict recovery is implemented for claim saves only. Artifact hooks cover team snapshots and strict snapshot shares, not every derivative path. The clean frozen environment still requires declared Google extras to execute sharing tests because the lock/dependency groups remain incomplete.
 
 ## Integrity Verification
-Input baseline contained 237 files. No pre-existing file was intentionally removed. Final packaging excludes virtual environments, node_modules, build output, caches, coverage, generated data, temporary databases, and compiler artifacts.
+The input baseline contained 251 files. No pre-existing file was removed. Final packaging excludes virtual environments, node_modules, dist, caches, coverage, generated data, temporary databases, and compiler artifacts.
 
 ## Traceability Matrix
 | Research need | User story id | Plan requirement | Implementation evidence | Test evidence | Status |
 |---|---|---|---|---|---|
-| Safe sharing | US-003 | PR-3 | share policy + linked columns | strict/compatibility tests | COMPLETE |
-| Activity visibility | US-002 | PR-2 | MeetingActivity component | type-check/build | PARTIAL |
-| Data lineage UX | US-007 | PR-4 | MeetingData component | type-check/build | PARTIAL |
-| Durable deletion | US-007 | PR-5 | quarantine + jobs service | receipt/deletion rules | PARTIAL |
-| Verifiable receipt | US-007 | PR-5 | receipts service | mutation test | COMPLETE |
-| Audit/policy enforcement | US-008/US-009 | PR-6 | existing API/rules | existing selected tests | PARTIAL |
+| Ground claims | US-001 | Full Review interaction | TrustedClaims and typed API | 97 focused tests + build | COMPLETE |
+| Correct speakers | US-002 | Mapping/reapproval | Speaker dialog and status | mapping tests + build | PARTIAL |
+| Safe immutable sharing | US-003 | Snapshot gate/action | share policy, Share snapshot | sharing suite | COMPLETE persistent path |
+| Track derivatives | US-007 | Registry hooks | publish/share registry calls | registry tests | PARTIAL |
+| Release stability | All | Zero failures | not completed | prior 23 failures | BLOCKED |
 
 ## Suggested Commit Message
-`trusted-workflows: gate shares and add quarantine deletion foundation — 32 selected tests pass`
+`trusted-review: complete evidence editing, conflict recovery, speaker mapping, and snapshot sharing — 97 focused tests pass`
