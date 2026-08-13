@@ -538,3 +538,19 @@ serves the Chart.js dashboard page unauthenticated.
 - FastAPI application with basic health check endpoint
 - In-memory SQLite test database setup
 - Basic Pydantic models for meetings and transcription
+
+## [1.7.0] — 2026-08-13
+
+### Fixed
+- Added explicit database session-factory reset API for controlled shutdown/testing.
+- Corrected diarization reference coverage for dictionary-backed transcript segments.
+- Removed obsolete strict xfail markers from completed API-key behavior tests.
+- Made local-transcription import-isolation tests portable across checkout locations.
+- Made async persistence tests avoid nested `asyncio.run` calls.
+- Made Calendar connection-state test independent of an expired fixed timestamp.
+
+### Verification
+- API-key, database-session, and diarization group: 89 passed plus 12 pre-existing non-strict xfails.
+- Batch, Calendar, review-integration, and local transcription group: 137 passed.
+- Sharing/storage/local/UI isolated regression group: 125 passed.
+- Full regression still exposes cross-module test-database schema contamination and is not green.

@@ -1,4 +1,4 @@
-# MeetingNotesAI 1.6.0
+# MeetingNotesAI 1.7.0
 
 MeetingNotesAI is a privacy-first FastAPI and React workspace that turns uploaded or live conversations into **reviewable evidence, approved notes, accountable actions, and controlled shares**.
 

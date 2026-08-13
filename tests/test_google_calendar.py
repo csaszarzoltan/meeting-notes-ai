@@ -73,6 +73,7 @@ def _mock_auth(_setup_test_db):
 def _mock_token_encryptor(monkeypatch: pytest.MonkeyPatch):
     """Make TokenEncryptor.decrypt a passthrough for mock tokens."""
     from meeting_notes_ai.config import settings
+
     monkeypatch.setattr(settings, "storage_encryption_key", "test-key-for-calendar-integration")
     from meeting_notes_ai.services import token_encryption
 
@@ -83,15 +84,11 @@ def _mock_token_encryptor(monkeypatch: pytest.MonkeyPatch):
 
     def _passthrough_decrypt(self, token_b64: str) -> str:
         if token_b64.startswith("encrypted:"):
-            return token_b64[len("encrypted:"):]
+            return token_b64[len("encrypted:") :]
         return original_decrypt(self, token_b64)
 
-    monkeypatch.setattr(
-        token_encryption.TokenEncryptor, "encrypt", _passthrough_encrypt
-    )
-    monkeypatch.setattr(
-        token_encryption.TokenEncryptor, "decrypt", _passthrough_decrypt
-    )
+    monkeypatch.setattr(token_encryption.TokenEncryptor, "encrypt", _passthrough_encrypt)
+    monkeypatch.setattr(token_encryption.TokenEncryptor, "decrypt", _passthrough_decrypt)
     yield
 
 
@@ -541,9 +538,7 @@ class TestOAuth2AuthorizationURLBehavioral:
 
         from meeting_notes_ai.main import app
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.post(
                 "/api/v1/integrations/google-calendar/auth",
                 headers=auth_headers,
@@ -569,9 +564,7 @@ class TestOAuth2AuthorizationURLBehavioral:
 
         from meeting_notes_ai.main import app
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp1 = await client.post(
                 "/api/v1/integrations/google-calendar/auth",
                 headers=auth_headers,
@@ -623,13 +616,14 @@ class TestOAuth2CallbackBehavioral:
             "scope": ["https://www.googleapis.com/auth/calendar.readonly"],
         }
 
-        with patch(
-            "meeting_notes_ai.routes.google_calendar._verify_oauth_state",
-            new_callable=AsyncMock,
-            return_value="test-user-id",
-        ), patch(
-            "meeting_notes_ai.routes.google_calendar._get_calendar_service"
-        ) as mock_svc_cls:
+        with (
+            patch(
+                "meeting_notes_ai.routes.google_calendar._verify_oauth_state",
+                new_callable=AsyncMock,
+                return_value="test-user-id",
+            ),
+            patch("meeting_notes_ai.routes.google_calendar._get_calendar_service") as mock_svc_cls,
+        ):
             mock_service = mock_svc_cls.return_value
             mock_service.exchange_code = AsyncMock(return_value=mock_tokens)
 
@@ -687,13 +681,14 @@ class TestOAuth2CallbackBehavioral:
             "scope": ["https://www.googleapis.com/auth/calendar.readonly"],
         }
 
-        with patch(
-            "meeting_notes_ai.routes.google_calendar._verify_oauth_state",
-            new_callable=AsyncMock,
-            return_value="test-user-id",
-        ), patch(
-            "meeting_notes_ai.routes.google_calendar._get_calendar_service"
-        ) as mock_svc_cls:
+        with (
+            patch(
+                "meeting_notes_ai.routes.google_calendar._verify_oauth_state",
+                new_callable=AsyncMock,
+                return_value="test-user-id",
+            ),
+            patch("meeting_notes_ai.routes.google_calendar._get_calendar_service") as mock_svc_cls,
+        ):
             mock_service = mock_svc_cls.return_value
             mock_service.exchange_code = AsyncMock(return_value=mock_tokens)
 
@@ -763,9 +758,7 @@ class TestOAuthStatePurgeBehavioral:
             assert user_id == "test-user-id"
             await session.commit()
 
-            remaining = (
-                await session.execute(select(OAuthState.state_token))
-            ).scalars().all()
+            remaining = (await session.execute(select(OAuthState.state_token))).scalars().all()
             assert "used-state-f5" not in remaining
             assert "expired-state-f5" not in remaining
             assert "valid-state-f5" not in remaining  # consumed on read
@@ -811,12 +804,13 @@ class TestEventListingBehavioral:
             }
         ]
 
-        with patch(
-            "meeting_notes_ai.routes.google_calendar._load_user_token",
-            new_callable=AsyncMock,
-        ) as mock_load, patch(
-            "meeting_notes_ai.routes.google_calendar._get_calendar_service"
-        ) as mock_svc_cls:
+        with (
+            patch(
+                "meeting_notes_ai.routes.google_calendar._load_user_token",
+                new_callable=AsyncMock,
+            ) as mock_load,
+            patch("meeting_notes_ai.routes.google_calendar._get_calendar_service") as mock_svc_cls,
+        ):
             mock_token_record = AsyncMock()
             mock_token_record.encrypted_access_token = "encrypted:at"
             mock_token_record.encrypted_refresh_token = "encrypted:rt"
@@ -856,12 +850,13 @@ class TestEventListingBehavioral:
 
         from meeting_notes_ai.main import app
 
-        with patch(
-            "meeting_notes_ai.routes.google_calendar._load_user_token",
-            new_callable=AsyncMock,
-        ) as mock_load, patch(
-            "meeting_notes_ai.routes.google_calendar._get_calendar_service"
-        ) as mock_svc_cls:
+        with (
+            patch(
+                "meeting_notes_ai.routes.google_calendar._load_user_token",
+                new_callable=AsyncMock,
+            ) as mock_load,
+            patch("meeting_notes_ai.routes.google_calendar._get_calendar_service") as mock_svc_cls,
+        ):
             mock_token_record = AsyncMock()
             mock_token_record.encrypted_access_token = "encrypted:at"
             mock_token_record.encrypted_refresh_token = "encrypted:rt"
@@ -912,15 +907,17 @@ class TestEventListingBehavioral:
             }
         ]
 
-        with patch(
-            "meeting_notes_ai.routes.google_calendar._load_user_token",
-            new_callable=AsyncMock,
-        ) as mock_load, patch(
-            "meeting_notes_ai.routes.google_calendar._get_calendar_service"
-        ) as mock_svc_cls, patch(
-            "meeting_notes_ai.routes.google_calendar._get_imported_event_ids",
-            new_callable=AsyncMock,
-            return_value={"imported-event"},
+        with (
+            patch(
+                "meeting_notes_ai.routes.google_calendar._load_user_token",
+                new_callable=AsyncMock,
+            ) as mock_load,
+            patch("meeting_notes_ai.routes.google_calendar._get_calendar_service") as mock_svc_cls,
+            patch(
+                "meeting_notes_ai.routes.google_calendar._get_imported_event_ids",
+                new_callable=AsyncMock,
+                return_value={"imported-event"},
+            ),
         ):
             mock_token_record = AsyncMock()
             mock_token_record.encrypted_access_token = "encrypted:at"
@@ -1019,12 +1016,13 @@ class TestEventAttendeeFieldMappingBehavioral:
             }
         ]
 
-        with patch(
-            "meeting_notes_ai.routes.google_calendar._load_user_token",
-            new_callable=AsyncMock,
-        ) as mock_load, patch(
-            "meeting_notes_ai.routes.google_calendar._get_calendar_service"
-        ) as mock_svc_cls:
+        with (
+            patch(
+                "meeting_notes_ai.routes.google_calendar._load_user_token",
+                new_callable=AsyncMock,
+            ) as mock_load,
+            patch("meeting_notes_ai.routes.google_calendar._get_calendar_service") as mock_svc_cls,
+        ):
             mock_token_record = AsyncMock()
             mock_token_record.encrypted_access_token = "encrypted:at"
             mock_token_record.encrypted_refresh_token = "encrypted:rt"
@@ -1074,17 +1072,16 @@ class TestEventsErrorHandlingBehavioral:
         from meeting_notes_ai.main import app
         from meeting_notes_ai.services.google_calendar import TokenExpiredError
 
-        with patch(
-            "meeting_notes_ai.routes.google_calendar._load_user_token",
-            new_callable=AsyncMock,
-            return_value=self._mock_token_record(),
-        ), patch(
-            "meeting_notes_ai.routes.google_calendar._get_calendar_service"
-        ) as mock_svc_cls:
+        with (
+            patch(
+                "meeting_notes_ai.routes.google_calendar._load_user_token",
+                new_callable=AsyncMock,
+                return_value=self._mock_token_record(),
+            ),
+            patch("meeting_notes_ai.routes.google_calendar._get_calendar_service") as mock_svc_cls,
+        ):
             mock_service = mock_svc_cls.return_value
-            mock_service.list_events = AsyncMock(
-                side_effect=TokenExpiredError("token revoked")
-            )
+            mock_service.list_events = AsyncMock(side_effect=TokenExpiredError("token revoked"))
 
             async with AsyncClient(
                 transport=ASGITransport(app=app), base_url="http://test"
@@ -1106,17 +1103,16 @@ class TestEventsErrorHandlingBehavioral:
         from meeting_notes_ai.main import app
         from meeting_notes_ai.services.google_calendar import GoogleCalendarError
 
-        with patch(
-            "meeting_notes_ai.routes.google_calendar._load_user_token",
-            new_callable=AsyncMock,
-            return_value=self._mock_token_record(),
-        ), patch(
-            "meeting_notes_ai.routes.google_calendar._get_calendar_service"
-        ) as mock_svc_cls:
+        with (
+            patch(
+                "meeting_notes_ai.routes.google_calendar._load_user_token",
+                new_callable=AsyncMock,
+                return_value=self._mock_token_record(),
+            ),
+            patch("meeting_notes_ai.routes.google_calendar._get_calendar_service") as mock_svc_cls,
+        ):
             mock_service = mock_svc_cls.return_value
-            mock_service.list_events = AsyncMock(
-                side_effect=GoogleCalendarError("api down")
-            )
+            mock_service.list_events = AsyncMock(side_effect=GoogleCalendarError("api down"))
 
             async with AsyncClient(
                 transport=ASGITransport(app=app), base_url="http://test"
@@ -1162,15 +1158,17 @@ class TestCalendarImportBehavioral:
             "calendar_id": "primary",
         }
 
-        with patch(
-            "meeting_notes_ai.routes.google_calendar._load_user_token",
-            new_callable=AsyncMock,
-        ) as mock_load, patch(
-            "meeting_notes_ai.routes.google_calendar._get_calendar_service"
-        ) as mock_svc_cls, patch(
-            "meeting_notes_ai.routes.google_calendar._get_imported_event_ids",
-            new_callable=AsyncMock,
-            return_value=set(),
+        with (
+            patch(
+                "meeting_notes_ai.routes.google_calendar._load_user_token",
+                new_callable=AsyncMock,
+            ) as mock_load,
+            patch("meeting_notes_ai.routes.google_calendar._get_calendar_service") as mock_svc_cls,
+            patch(
+                "meeting_notes_ai.routes.google_calendar._get_imported_event_ids",
+                new_callable=AsyncMock,
+                return_value=set(),
+            ),
         ):
             mock_token_record = AsyncMock()
             mock_token_record.encrypted_access_token = "encrypted-at"
@@ -1213,13 +1211,16 @@ class TestCalendarImportBehavioral:
 
         from meeting_notes_ai.main import app
 
-        with patch(
-            "meeting_notes_ai.routes.google_calendar._load_user_token",
-            new_callable=AsyncMock,
-        ) as mock_load, patch(
-            "meeting_notes_ai.routes.google_calendar._get_imported_event_ids",
-            new_callable=AsyncMock,
-            return_value={"already-imported-event"},
+        with (
+            patch(
+                "meeting_notes_ai.routes.google_calendar._load_user_token",
+                new_callable=AsyncMock,
+            ) as mock_load,
+            patch(
+                "meeting_notes_ai.routes.google_calendar._get_imported_event_ids",
+                new_callable=AsyncMock,
+                return_value={"already-imported-event"},
+            ),
         ):
             mock_token_record = AsyncMock()
             mock_token_record.encrypted_access_token = "encrypted:at"
@@ -1298,13 +1299,14 @@ class TestSharedCalendarImportBehavioral:
 
         original_override = app.dependency_overrides.get(get_current_user)
 
-        with patch(
-            "meeting_notes_ai.routes.google_calendar._load_user_token",
-            new_callable=AsyncMock,
-            return_value=mock_token,
-        ), patch(
-            "meeting_notes_ai.routes.google_calendar._get_calendar_service"
-        ) as mock_svc_cls:
+        with (
+            patch(
+                "meeting_notes_ai.routes.google_calendar._load_user_token",
+                new_callable=AsyncMock,
+                return_value=mock_token,
+            ),
+            patch("meeting_notes_ai.routes.google_calendar._get_calendar_service") as mock_svc_cls,
+        ):
             mock_service = mock_svc_cls.return_value
             mock_service.get_event = AsyncMock(return_value=mock_event)
 
@@ -1366,21 +1368,24 @@ class TestSharedCalendarImportBehavioral:
         mock_token.encrypted_refresh_token = "encrypted:rt"
         mock_token.token_expires_at = None
 
-        with patch(
-            "meeting_notes_ai.routes.google_calendar._get_imported_event_ids",
-            new_callable=AsyncMock,
-            return_value=set(),
-        ), patch(
-            "meeting_notes_ai.routes.google_calendar._event_imported_by_any_user",
-            new_callable=AsyncMock,
-            return_value=False,
-        ), patch(
-            "meeting_notes_ai.routes.google_calendar._load_user_token",
-            new_callable=AsyncMock,
-            return_value=mock_token,
-        ), patch(
-            "meeting_notes_ai.routes.google_calendar._get_calendar_service"
-        ) as mock_svc_cls:
+        with (
+            patch(
+                "meeting_notes_ai.routes.google_calendar._get_imported_event_ids",
+                new_callable=AsyncMock,
+                return_value=set(),
+            ),
+            patch(
+                "meeting_notes_ai.routes.google_calendar._event_imported_by_any_user",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch(
+                "meeting_notes_ai.routes.google_calendar._load_user_token",
+                new_callable=AsyncMock,
+                return_value=mock_token,
+            ),
+            patch("meeting_notes_ai.routes.google_calendar._get_calendar_service") as mock_svc_cls,
+        ):
             mock_service = mock_svc_cls.return_value
             mock_service.get_event = AsyncMock(return_value=mock_event)
 
@@ -1428,21 +1433,21 @@ class TestImportErrorHandlingBehavioral:
         from meeting_notes_ai.main import app
         from meeting_notes_ai.services.google_calendar import TokenExpiredError
 
-        with patch(
-            "meeting_notes_ai.routes.google_calendar._get_imported_event_ids",
-            new_callable=AsyncMock,
-            return_value=set(),
-        ), patch(
-            "meeting_notes_ai.routes.google_calendar._load_user_token",
-            new_callable=AsyncMock,
-            return_value=self._mock_token_record(),
-        ), patch(
-            "meeting_notes_ai.routes.google_calendar._get_calendar_service"
-        ) as mock_svc_cls:
+        with (
+            patch(
+                "meeting_notes_ai.routes.google_calendar._get_imported_event_ids",
+                new_callable=AsyncMock,
+                return_value=set(),
+            ),
+            patch(
+                "meeting_notes_ai.routes.google_calendar._load_user_token",
+                new_callable=AsyncMock,
+                return_value=self._mock_token_record(),
+            ),
+            patch("meeting_notes_ai.routes.google_calendar._get_calendar_service") as mock_svc_cls,
+        ):
             mock_service = mock_svc_cls.return_value
-            mock_service.get_event = AsyncMock(
-                side_effect=TokenExpiredError("token revoked")
-            )
+            mock_service.get_event = AsyncMock(side_effect=TokenExpiredError("token revoked"))
 
             async with AsyncClient(
                 transport=ASGITransport(app=app), base_url="http://test"
@@ -1464,21 +1469,21 @@ class TestImportErrorHandlingBehavioral:
         from meeting_notes_ai.main import app
         from meeting_notes_ai.services.google_calendar import GoogleCalendarError
 
-        with patch(
-            "meeting_notes_ai.routes.google_calendar._get_imported_event_ids",
-            new_callable=AsyncMock,
-            return_value=set(),
-        ), patch(
-            "meeting_notes_ai.routes.google_calendar._load_user_token",
-            new_callable=AsyncMock,
-            return_value=self._mock_token_record(),
-        ), patch(
-            "meeting_notes_ai.routes.google_calendar._get_calendar_service"
-        ) as mock_svc_cls:
+        with (
+            patch(
+                "meeting_notes_ai.routes.google_calendar._get_imported_event_ids",
+                new_callable=AsyncMock,
+                return_value=set(),
+            ),
+            patch(
+                "meeting_notes_ai.routes.google_calendar._load_user_token",
+                new_callable=AsyncMock,
+                return_value=self._mock_token_record(),
+            ),
+            patch("meeting_notes_ai.routes.google_calendar._get_calendar_service") as mock_svc_cls,
+        ):
             mock_service = mock_svc_cls.return_value
-            mock_service.get_event = AsyncMock(
-                side_effect=GoogleCalendarError("secret-detail-xyz")
-            )
+            mock_service.get_event = AsyncMock(side_effect=GoogleCalendarError("secret-detail-xyz"))
 
             async with AsyncClient(
                 transport=ASGITransport(app=app), base_url="http://test"
@@ -1524,12 +1529,13 @@ class TestTenantIsolationBehavioral:
             }
         ]
 
-        with patch(
-            "meeting_notes_ai.routes.google_calendar._load_user_token",
-            new_callable=AsyncMock,
-        ) as mock_load, patch(
-            "meeting_notes_ai.routes.google_calendar._get_calendar_service"
-        ) as mock_svc_cls:
+        with (
+            patch(
+                "meeting_notes_ai.routes.google_calendar._load_user_token",
+                new_callable=AsyncMock,
+            ) as mock_load,
+            patch("meeting_notes_ai.routes.google_calendar._get_calendar_service") as mock_svc_cls,
+        ):
             mock_token_a = AsyncMock()
             mock_token_a.encrypted_access_token = "encrypted:a-at"
             mock_token_a.encrypted_refresh_token = "encrypted:a-rt"
@@ -1551,9 +1557,9 @@ class TestTenantIsolationBehavioral:
             mock_service.encryptor.decrypt = lambda token: token.replace("encrypted:", "")
             # User A gets their events, User B gets empty
             mock_service.list_events = AsyncMock(
-                side_effect=lambda **kwargs: user_a_events
-                if kwargs.get("access_token") == "a-at"
-                else []
+                side_effect=lambda **kwargs: (
+                    user_a_events if kwargs.get("access_token") == "a-at" else []
+                )
             )
 
             async with AsyncClient(
@@ -1614,12 +1620,13 @@ class TestTokenRefreshBehavioral:
 
         expired_time = datetime.now(timezone.utc) - timedelta(hours=1)
 
-        with patch(
-            "meeting_notes_ai.routes.google_calendar._load_user_token",
-            new_callable=AsyncMock,
-        ) as mock_load, patch(
-            "meeting_notes_ai.routes.google_calendar._get_calendar_service"
-        ) as mock_svc_cls:
+        with (
+            patch(
+                "meeting_notes_ai.routes.google_calendar._load_user_token",
+                new_callable=AsyncMock,
+            ) as mock_load,
+            patch("meeting_notes_ai.routes.google_calendar._get_calendar_service") as mock_svc_cls,
+        ):
             mock_token_record = AsyncMock()
             mock_token_record.encrypted_access_token = "old-encrypted-at"
             mock_token_record.encrypted_refresh_token = "encrypted-rt"
@@ -1630,9 +1637,7 @@ class TestTokenRefreshBehavioral:
             mock_service.refresh_token = AsyncMock(
                 return_value={
                     "access_token": "new-access-token",
-                    "expires_at": (
-                        datetime.now(timezone.utc) + timedelta(hours=1)
-                    ).isoformat(),
+                    "expires_at": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
                     "token_type": "Bearer",
                 }
             )
@@ -1661,12 +1666,13 @@ class TestTokenRefreshBehavioral:
 
         future_time = datetime.now(timezone.utc) + timedelta(hours=1)
 
-        with patch(
-            "meeting_notes_ai.routes.google_calendar._load_user_token",
-            new_callable=AsyncMock,
-        ) as mock_load, patch(
-            "meeting_notes_ai.routes.google_calendar._get_calendar_service"
-        ) as mock_svc_cls:
+        with (
+            patch(
+                "meeting_notes_ai.routes.google_calendar._load_user_token",
+                new_callable=AsyncMock,
+            ) as mock_load,
+            patch("meeting_notes_ai.routes.google_calendar._get_calendar_service") as mock_svc_cls,
+        ):
             mock_token_record = AsyncMock()
             mock_token_record.encrypted_access_token = "valid-encrypted-at"
             mock_token_record.encrypted_refresh_token = "encrypted-rt"
@@ -1722,24 +1728,17 @@ class TestSSRFProtectionBehavioral:
         protector = SSRFProtector()
         assert protector.validate_url("https://oauth2.googleapis.com/token") is True
         assert (
-            protector.validate_url(
-                "https://www.googleapis.com/calendar/v3/users/me/calendarList"
-            )
+            protector.validate_url("https://www.googleapis.com/calendar/v3/users/me/calendarList")
             is True
         )
-        assert (
-            protector.validate_url("https://accounts.google.com/o/oauth2/auth")
-            is True
-        )
+        assert protector.validate_url("https://accounts.google.com/o/oauth2/auth") is True
 
     def test_ssrf_protector_blocks_cloud_metadata(self):
         """SSRFProtector blocks cloud metadata endpoints."""
         from meeting_notes_ai.security import SSRFProtector
 
         protector = SSRFProtector()
-        assert protector.validate_url("https://169.254.169.254/latest/meta-data/") is (
-            False
-        )
+        assert protector.validate_url("https://169.254.169.254/latest/meta-data/") is (False)
 
 
 class TestCalendarStatusBehavioral:
@@ -1761,9 +1760,7 @@ class TestCalendarStatusBehavioral:
             mock_token = AsyncMock()
             mock_token.calendar_id = "primary"
             mock_token.created_at = datetime(2026, 8, 6, 12, 0, 0, tzinfo=timezone.utc)
-            mock_token.token_expires_at = datetime(
-                2026, 8, 6, 13, 0, 0, tzinfo=timezone.utc
-            )
+            mock_token.token_expires_at = datetime(2099, 8, 6, 13, 0, 0, tzinfo=timezone.utc)
             mock_load.return_value = mock_token
 
             async with AsyncClient(

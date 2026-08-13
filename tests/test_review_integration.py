@@ -264,10 +264,7 @@ class TestFinalizePersistsReviewDetail:
 
         app.dependency_overrides[get_live_service] = lambda: service
         try:
-            url = (
-                f"/api/v1/meetings/live?token={_token('test-user-id')}"
-                f"&meeting_id={meeting_id}"
-            )
+            url = f"/api/v1/meetings/live?token={_token('test-user-id')}&meeting_id={meeting_id}"
             with client.websocket_connect(url) as ws:
                 ws.send_bytes(b"\x00" * 3200)
                 ws.send_text('{"type": "finalize"}')
@@ -353,12 +350,12 @@ class TestFinalizeModeThreading:
             transcription_service=_FakeTranscription(),
             extraction_service=_FakeExtractionHealthcare(),
         )
-        meeting_id = _fresh_meeting(mode="healthcare")
+        meeting_id = await asyncio.to_thread(_fresh_meeting, mode="healthcare")
         session = await service.create_session(meeting_id=meeting_id, user_id="test-user-id")
         session.chunks.append(LiveChunk(data=b"\x00" * 3200))
         await service.finalize(session.id)
 
-        row = _fetch_meeting(meeting_id)
+        row = await asyncio.to_thread(_fetch_meeting, meeting_id)
         assert row is not None
         assert row.mode == "healthcare", (
             f"finalize must persist the session's mode (healthcare), got {row.mode!r} — "
@@ -376,21 +373,22 @@ class TestFinalizeModeThreading:
             transcription_service=_FakeTranscription(),
             extraction_service=_FakeExtractionHealthcare(),
         )
-        meeting_id = _fresh_meeting(mode="healthcare")
+        meeting_id = await asyncio.to_thread(_fresh_meeting, mode="healthcare")
         session = await service.create_session(meeting_id=meeting_id, user_id="test-user-id")
         session.chunks.append(LiveChunk(data=b"\x00" * 3200))
         await service.finalize(session.id)
 
-        row = _fetch_meeting(meeting_id)
+        row = await asyncio.to_thread(_fetch_meeting, meeting_id)
         assert row is not None
         meta = {}
         if row.metadata_json:
             import json
 
             meta = json.loads(row.metadata_json)
-        assert meta.get("review_status") == "needs_review" or getattr(
-            row, "review_status", None
-        ) == "needs_review", (
+        assert (
+            meta.get("review_status") == "needs_review"
+            or getattr(row, "review_status", None) == "needs_review"
+        ), (
             f"healthcare finalize must persist review_status='needs_review' "
             f"(meta={meta!r}) — P0-4 must apply resolve_processing_policy"
         )
@@ -433,17 +431,15 @@ class TestNoOpenAICallLocalBackend:
 
             def transcribe(self, audio, language=None):
                 calls.append("local_backend_called")
-                segments = [(0.0, 1.0, "no openai involved")]
+                segments = [(0.0, 1.0, "local transcription complete")]
                 info = AsyncMock()
                 info.language = language or "en"
                 info.duration = 1.0
                 return segments, info
 
-        service = LocalWhisperTranscriptionService(
-            whisper=_RecordingWhisper("small", "int8")
-        )
+        service = LocalWhisperTranscriptionService(whisper=_RecordingWhisper("small", "int8"))
         result = await service.transcribe(b"\x00" * 3200, "inperson.wav")
 
         assert calls == ["local_backend_called"], "transcription must go to the local backend"
-        assert result.text == "no openai involved"
+        assert result.text == "local transcription complete"
         assert "openai" not in result.text.lower()

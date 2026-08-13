@@ -316,9 +316,7 @@ class TestLocalWhisperEmptyInput:
             extraction_service=MagicMock(),
             rate_limiter=MagicMock(),
         )
-        result = await service.transcribe_file(
-            b"", "empty.wav", user_id="test-user-id"
-        )
+        result = await service.transcribe_file(b"", "empty.wav", user_id="test-user-id")
 
         assert result.transcript == ""
         assert result.summary == ""
@@ -343,9 +341,7 @@ class TestLocalWhisperEmptyInput:
                 return ExtractionResult()
 
         service = LiveTranscriptionService(
-            transcription_service=LocalWhisperTranscriptionService(
-                whisper=_EmptyLocalWhisper()
-            ),
+            transcription_service=LocalWhisperTranscriptionService(whisper=_EmptyLocalWhisper()),
             extraction_service=_EmptyExtraction(),
             rate_limiter=MagicMock(),
         )
@@ -388,9 +384,7 @@ class TestLocalWhisperBackendSelection:
         finally:
             settings.transcription_backend = original
 
-        assert isinstance(
-            service.transcription_service, LocalWhisperTranscriptionService
-        ), (
+        assert isinstance(service.transcription_service, LocalWhisperTranscriptionService), (
             "TRANSCRIPTION_BACKEND=local must route to the local whisper service, "
             f"got {type(service.transcription_service).__name__}"
         )
@@ -403,6 +397,7 @@ class TestLocalWhisperNoOpenaiImport:
     def test_importing_local_service_does_not_import_openai(self):
         import subprocess
         import sys as _sys
+        from pathlib import Path
 
         code = (
             "import sys;"
@@ -413,7 +408,7 @@ class TestLocalWhisperNoOpenaiImport:
             [_sys.executable, "-c", code],
             capture_output=True,
             text=True,
-            cwd="/home/zoltan/meeting-notes-ai",
+            cwd=str(Path(__file__).resolve().parents[1]),
             env={**os.environ, "PYTHONPATH": "src"},
         )
         assert proc.returncode == 0, proc.stderr
