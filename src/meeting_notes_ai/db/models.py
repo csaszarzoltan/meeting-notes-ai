@@ -559,3 +559,70 @@ class AuditChainEvent(Base, TimestampMixin):
     payload_sha256: Mapped[str] = mapped_column(String(64))
     previous_hash: Mapped[str] = mapped_column(String(64), default="0" * 64)
     event_hash: Mapped[str] = mapped_column(String(64), unique=True)
+
+
+class SpeakerMapping(Base, TimestampMixin):
+    __tablename__ = "speaker_mappings"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    meeting_id: Mapped[str] = mapped_column(ForeignKey("meetings.id"), index=True)
+    raw_label: Mapped[str] = mapped_column(String(120))
+    canonical_name: Mapped[str] = mapped_column(String(200))
+    user_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    created_by: Mapped[str] = mapped_column(String(36))
+
+
+class ReviewDecision(Base, TimestampMixin):
+    __tablename__ = "review_decisions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    claim_id: Mapped[str] = mapped_column(ForeignKey("claims.id"), index=True)
+    claim_version: Mapped[int] = mapped_column(Integer)
+    decision: Mapped[str] = mapped_column(String(24))
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    actor_id: Mapped[str] = mapped_column(String(36))
+    policy_version_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+
+
+class PublishedSnapshot(Base, TimestampMixin):
+    __tablename__ = "published_snapshots"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    meeting_id: Mapped[str] = mapped_column(ForeignKey("meetings.id"), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    policy_version_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    payload_json: Mapped[str] = mapped_column(Text)
+    payload_sha256: Mapped[str] = mapped_column(String(64))
+    created_by: Mapped[str] = mapped_column(String(36))
+
+
+class PolicyDecision(Base, TimestampMixin):
+    __tablename__ = "policy_decisions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    meeting_id: Mapped[str] = mapped_column(ForeignKey("meetings.id"), index=True)
+    policy_version_id: Mapped[str] = mapped_column(ForeignKey("policy_versions.id"))
+    operation: Mapped[str] = mapped_column(String(80))
+    outcome: Mapped[str] = mapped_column(String(32))
+    reasons_json: Mapped[str] = mapped_column(Text, default="[]")
+
+
+class DeletionResult(Base, TimestampMixin):
+    __tablename__ = "deletion_results"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    job_id: Mapped[str] = mapped_column(ForeignKey("deletion_jobs.id"), index=True)
+    artifact_id: Mapped[str] = mapped_column(ForeignKey("artifacts.id"))
+    outcome: Mapped[str] = mapped_column(String(48))
+    detail_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    completed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+
+class AuditExport(Base, TimestampMixin):
+    __tablename__ = "audit_exports"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    team_id: Mapped[str] = mapped_column(String(36), index=True)
+    filters_json: Mapped[str] = mapped_column(Text, default="{}")
+    status: Mapped[str] = mapped_column(String(24), default="completed")
+    terminal_hash: Mapped[str] = mapped_column(String(64), default="0" * 64)
+    manifest_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    requested_by: Mapped[str] = mapped_column(String(36))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

@@ -1,3 +1,3 @@
 # Data Governance
 
-Artifact lineage is tenant-scoped and acyclic. Internal artifacts may be marked deleted or already absent; external artifacts are reported as `external_remediation_required` unless deletion is independently verified. Audit exports contain canonical JSONL and an HMAC-SHA256 signed manifest. A signing key must contain at least 32 bytes.
+The governance API is rooted at `/api/v1/governance`. It exposes tenant-scoped lineage, idempotent deletion jobs, retry/status/receipt operations, audit validation/export, and versioned policies. Internal artifacts become deleted or already absent; external artifacts are always reported as `external_remediation_required` unless independently verified. Receipts and audit ZIP manifests use HMAC-SHA256 and require `AUDIT_EXPORT_SIGNING_KEY` of at least 32 bytes. Policy writes use `expected_version` and return 409 on conflict.

@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.4.1] — 2026-08-13
+
+### Added
+- Persistent trusted-record review, evidence, speaker-mapping, decision, publish, and activity APIs.
+- Governance lineage, deletion job, signed receipt, audit export, and versioned policy APIs.
+- Corrective Alembic migration completing trusted-record governance tables.
+- Functional Compliance Center audit export and policy loading flows.
+
+### Tests
+- Added real SQLite schema and API contract tests; 29 selected tests pass.
+
+
 ## [1.4.0] — 2026-08-13
 
 ### Added

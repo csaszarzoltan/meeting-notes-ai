@@ -1,4 +1,4 @@
-# MeetingNotesAI 1.4.0
+# MeetingNotesAI 1.4.1
 
 MeetingNotesAI is a privacy-first FastAPI and React workspace that turns uploaded or live conversations into **reviewable evidence, approved notes, accountable actions, and controlled shares**.
 
@@ -78,3 +78,7 @@ Version 1.4.0 introduces evidence validation, atomic speaker correction rules, s
 
 ### Verification
 Run `uv run pytest -q -n 0`, `uv run ruff check .`, and in `frontend/`, run `npm ci`, `npm run typecheck`, and `npm run build`.
+
+## Trusted-record and governance APIs
+
+Version 1.4.1 adds persistent trusted-record endpoints under `/api/v1/trusted` for record retrieval, optimistic claim edits, speaker mapping, decisions, publishing, and activity. Governance endpoints under `/api/v1/governance` provide lineage, deletion jobs and receipts, signed audit exports, and versioned policies. Claim edits require `If-Match`; strict healthcare/legal publishing fails closed when evidence or approval is missing. Set `AUDIT_EXPORT_SIGNING_KEY` to at least 32 bytes before downloading receipts or exports.

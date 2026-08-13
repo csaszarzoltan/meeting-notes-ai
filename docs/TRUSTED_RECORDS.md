@@ -1,3 +1,3 @@
 # Trusted Meeting Records
 
-MeetingNotesAI treats extracted claims as drafts. Evidence spans must belong to the same meeting and remain inside their transcript segment. Strict policy blocks unsupported, rejected, stale, or under-approved claims. Speaker mapping is versioned and atomic; stale revisions fail rather than overwrite newer work.
+The trusted-record API is rooted at `/api/v1/trusted`. `GET /meetings/{id}/record` projects historical meetings idempotently and returns canonical segments, claims, evidence, and the latest snapshot. Claim updates require `If-Match`; stale versions return 409 and missing headers return 428. Evidence must remain inside a same-meeting segment. Speaker mapping is bounded to 500 segments and marks approved claims for reapproval. Healthcare and legal publication requires grounding and approval. Published snapshot JSON and SHA-256 are immutable.
