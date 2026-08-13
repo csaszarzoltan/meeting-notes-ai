@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.7.1] — 2026-08-13
+
+### Fixed
+- Removed the final API-key behavioral test order dependency by cleaning up test-created keys through the public API before verifying the empty state.
+- Corrected import ordering in the application router.
+
+### Verification
+- Full regression: 1,400 collected, zero failures, zero errors, six expected xfails.
+- Frontend type-check and production build pass.
+- Backend startup and `/healthz` pass.
+
+
 ## [1.6.0] — 2026-08-13
 
 ### Added

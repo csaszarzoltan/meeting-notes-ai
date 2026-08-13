@@ -26,6 +26,7 @@ from meeting_notes_ai.routes import (
     api_keys,
     batches,
     google_calendar,
+    governance,
     health,
     hipaa,
     live_transcription,
@@ -37,7 +38,6 @@ from meeting_notes_ai.routes import (
     storage,
     teams,
     trusted_records,
-    governance,
     webhooks,
     workspace,
 )
