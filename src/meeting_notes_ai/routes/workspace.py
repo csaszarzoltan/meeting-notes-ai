@@ -557,6 +557,18 @@ async def queue_action(
             action["sync_state"] = "task-synced"
             return action
 
+        # Resolve speaker → provider assignee (deterministic, no LLM)
+        from meeting_notes_ai.services.speaker_mapping import resolve_assignee
+
+        participants = action.get("participants", [])
+        resolved = resolve_assignee(
+            action.get("owner", ""),
+            participants,
+            provider_slug,
+        )
+        if resolved:
+            action["assignee"] = resolved
+
         # Call the provider adapter
         adapter = get_adapter(provider_slug)()
         # Cache auth on adapter for create_task
