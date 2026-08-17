@@ -435,6 +435,9 @@ class OAuthState(Base, TimestampMixin):
     user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     used: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # PKCE fields for OAuth2 provider flows (NULL for non-PKCE flows like Google Calendar)
+    provider: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    code_verifier: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
 
 
 # ── PM Integration Tokens ──────────────────────────────────────────────────
