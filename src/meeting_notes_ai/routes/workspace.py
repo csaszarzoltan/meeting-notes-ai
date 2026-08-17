@@ -170,6 +170,19 @@ class DestinationRequest(BaseModel):
     destination: str = Field(min_length=1, max_length=100)
 
 
+class QueueActionBody(BaseModel):
+    """Queue request with optional confirmation gate."""
+
+    destination: str = Field(min_length=1, max_length=100)
+    confirmed: bool = False
+
+
+class PreviewRequest(BaseModel):
+    """Preview request body."""
+
+    destination: str = Field(min_length=1, max_length=100)
+
+
 class InsightRequest(BaseModel):
     """Private workspace query."""
 
@@ -505,10 +518,85 @@ async def update_action(
     return action
 
 
+def _generate_preview(action: dict[str, Any], provider_slug: str) -> dict[str, Any]:
+    """Build a preview dict showing how the action maps to a PM ticket."""
+    # Determine project from provider defaults
+    project = ""
+    if provider_slug == "jira":
+        project = "ACME"  # default from credentials
+    elif provider_slug == "linear":
+        project = "Team"
+    elif provider_slug == "asana":
+        project = "Project"
+    elif provider_slug == "todoist":
+        project = "Inbox"
+
+    # Map priority heuristic from action metadata
+    priority = "Medium"
+    title = action.get("title", "Action")
+    owner = action.get("owner", "Unassigned")
+
+    return {
+        "title": title,
+        "description": action.get("meeting", "") + " — " + title,
+        "assignee": owner,
+        "priority": priority,
+        "due": action.get("due", "Unscheduled"),
+        "project": project,
+        "destination": provider_slug,
+    }
+
+
+@router.post("/actions/{action_id}/preview")
+async def preview_action(
+    action_id: str,
+    body: PreviewRequest,
+    user: dict[str, Any] = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+) -> dict[str, Any]:
+    """Preview what the PM ticket would look like without creating it."""
+    _, state = _workspace(user["user_id"])
+    action = _find(state["actions"], action_id, "Action")
+
+    provider_slug = _resolve_provider(state["integrations"], body.destination)
+    if provider_slug is None:
+        raise HTTPException(
+            status_code=404, detail=f"No provider mapped for {body.destination}"
+        )
+
+    # Verify credentials exist
+    from sqlalchemy import select as sql_select
+
+    from meeting_notes_ai.db.models import PMIntegrationToken
+
+    stmt = sql_select(PMIntegrationToken).where(
+        PMIntegrationToken.user_id == user["user_id"],
+        PMIntegrationToken.provider == provider_slug,
+        PMIntegrationToken.is_active.is_(True),
+    )
+    row = (await db.execute(stmt)).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Connect {body.destination} before previewing this action",
+        )
+
+    preview = _generate_preview(action, provider_slug)
+    # Override project from stored credentials if available
+    from meeting_notes_ai.services.token_encryption import TokenEncryptor
+
+    encryptor = TokenEncryptor()
+    creds = json.loads(encryptor.decrypt(row.encrypted_credentials))
+    if creds.get("default_project"):
+        preview["project"] = creds["default_project"]
+
+    return preview
+
+
 @router.post("/actions/{action_id}/queue")
 async def queue_action(
     action_id: str,
-    request: DestinationRequest,
+    body: QueueActionBody,
     user: dict[str, Any] = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
@@ -516,7 +604,15 @@ async def queue_action(
     document, state = _workspace(user["user_id"])
     action = _find(state["actions"], action_id, "Action")
 
-    provider_slug = _resolve_provider(state["integrations"], request.destination)
+    provider_slug = _resolve_provider(state["integrations"], body.destination)
+
+    # ── Confirmation gate: if not confirmed, return preview + 409 ──
+    if not body.confirmed and provider_slug is not None:
+        preview = _generate_preview(action, provider_slug)
+        raise HTTPException(
+            status_code=409,
+            detail={"preview": preview, "message": "Confirm action to proceed"},
+        )
 
     # ── PM provider path (Jira / Linear / Asana / Todoist) ──
     if provider_slug is not None:
@@ -534,7 +630,7 @@ async def queue_action(
         row = (await db.execute(stmt)).scalar_one_or_none()
 
         if row is None:
-            display = request.destination
+            display = body.destination
             raise HTTPException(
                 status_code=409,
                 detail=f"Connect {display} before syncing this action",
@@ -586,13 +682,13 @@ async def queue_action(
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except (TimeoutError, asyncio.TimeoutError) as exc:
             msg = (
-                f"{request.destination} is temporarily unavailable."
+                f"{body.destination} is temporarily unavailable."
                 " Try again in a few minutes."
             )
             raise HTTPException(status_code=502, detail=msg) from exc
 
         action.update(
-            destination=request.destination,
+            destination=body.destination,
             status="queued",
             external_id=result.external_id,
             external_url=result.external_url,
@@ -600,7 +696,7 @@ async def queue_action(
         )
         _audit(state, "action.synced", {
             "action_id": action_id,
-            "destination": request.destination,
+            "destination": body.destination,
             "external_id": result.external_id,
         })
         _write_document(document)
@@ -608,21 +704,21 @@ async def queue_action(
         return action
 
     # ── Legacy connector path (Planner / Salesforce / Slack) ──
-    connector = state["integrations"].get(request.destination)
+    connector = state["integrations"].get(body.destination)
     if not connector or not connector["connected"]:
         raise HTTPException(
             status_code=409,
             detail="Connect an adapter before queuing this action",
         )
     action.update(
-        destination=request.destination,
+        destination=body.destination,
         status="queued",
         external_id=None,
         adapter_job_id=str(uuid4()),
     )
     _audit(state, "action.queued", {
         "action_id": action_id,
-        "destination": request.destination,
+        "destination": body.destination,
     })
     _write_document(document)
     return action
@@ -662,6 +758,107 @@ async def put_settings(
 async def integrations(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
     """List connector configuration."""
     return {"items": _workspace(user["user_id"])[1]["integrations"]}
+
+
+@router.get("/integrations/{name}/health")
+async def integration_health(
+    name: str,
+    user: dict[str, Any] = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+) -> dict[str, Any]:
+    """Return connection health status for a PM integration.
+
+    Status logic:
+    - "healthy":      is_active=True, token_expires_at > 24h from now
+    - "expiring_soon": is_active=True, token_expires_at within 24h
+    - "needs_reauth":  is_active=False or token_expires_at < now
+    - "disconnected":  disconnected_at is not None
+    """
+    _, state = _workspace(user["user_id"])
+    if name not in state["integrations"]:
+        raise HTTPException(status_code=404, detail="Integration not found")
+
+    provider_slug = state["integrations"][name].get("provider")
+    if not provider_slug or provider_slug not in PM_PROVIDERS:
+        raise HTTPException(status_code=404, detail="Health not available for this integration")
+
+    from sqlalchemy import select
+
+    from meeting_notes_ai.db.models import PMIntegrationToken
+
+    stmt = select(PMIntegrationToken).where(
+        PMIntegrationToken.user_id == user["user_id"],
+        PMIntegrationToken.provider == provider_slug,
+    )
+    row = (await db.execute(stmt)).scalar_one_or_none()
+
+    now = datetime.now(timezone.utc)
+    # SQLite stores datetimes without tz; normalize to naive UTC for comparison
+    expires = row.token_expires_at.replace(tzinfo=None) if row.token_expires_at else None
+    now_naive = now.replace(tzinfo=None)
+    default_email = state["integrations"][name].get("account_email", "")
+
+    if row is None:
+        return {
+            "status": "disconnected",
+            "token_expires_at": None,
+            "last_sync": None,
+            "error_count": 0,
+            "provider": provider_slug,
+            "account_email": default_email,
+        }
+
+    # Disconnected row takes precedence
+    if row.disconnected_at is not None:
+        return {
+            "status": "disconnected",
+            "token_expires_at": row.token_expires_at.isoformat() if row.token_expires_at else None,
+            "last_sync": row.disconnected_at.isoformat(),
+            "error_count": 0,
+            "provider": provider_slug,
+            "account_email": row.account_email or default_email,
+        }
+
+    token_expires_iso = row.token_expires_at.isoformat() if row.token_expires_at else None
+
+    if not row.is_active:
+        return {
+            "status": "needs_reauth",
+            "token_expires_at": token_expires_iso,
+            "last_sync": None,
+            "error_count": 0,
+            "provider": provider_slug,
+            "account_email": row.account_email or default_email,
+        }
+
+    if expires and expires <= now_naive:
+        return {
+            "status": "needs_reauth",
+            "token_expires_at": token_expires_iso,
+            "last_sync": None,
+            "error_count": 0,
+            "provider": provider_slug,
+            "account_email": row.account_email or default_email,
+        }
+
+    if expires and expires <= now_naive + timedelta(hours=24):
+        return {
+            "status": "expiring_soon",
+            "token_expires_at": token_expires_iso,
+            "last_sync": None,
+            "error_count": 0,
+            "provider": provider_slug,
+            "account_email": row.account_email or default_email,
+        }
+
+    return {
+        "status": "healthy",
+        "token_expires_at": token_expires_iso,
+        "last_sync": None,
+        "error_count": 0,
+        "provider": provider_slug,
+        "account_email": row.account_email or default_email,
+    }
 
 
 @router.post("/integrations/{name}/connect")

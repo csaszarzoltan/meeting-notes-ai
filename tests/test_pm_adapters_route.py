@@ -11,6 +11,8 @@ fully deterministic and offline.
 
 from __future__ import annotations
 
+import asyncio
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -18,11 +20,13 @@ import httpx
 import pytest
 import respx
 from fastapi.testclient import TestClient
+from sqlalchemy import delete as sql_delete
 from sqlalchemy import select
 
 import meeting_notes_ai.routes.workspace as workspace
 from meeting_notes_ai.auth import get_current_user
-from meeting_notes_ai.db.session import is_session_factory_configured
+from meeting_notes_ai.db.models import PMIntegrationToken
+from meeting_notes_ai.db.session import get_db_session, is_session_factory_configured
 from meeting_notes_ai.main import app
 
 pytestmark = pytest.mark.quick
@@ -115,7 +119,7 @@ def test_pm_connect_queue_flow_persists_synced_task(client: TestClient) -> None:
 
         queued = client.post(
             f"/api/v1/workspace/actions/{action['id']}/queue",
-            json={"destination": "Jira"},
+            json={"destination": "Jira", "confirmed": True},
         )
     assert queued.status_code == 200, queued.text
     body = queued.json()
@@ -126,9 +130,6 @@ def test_pm_connect_queue_flow_persists_synced_task(client: TestClient) -> None:
 
 def test_connect_persists_pm_integration_token_row() -> None:
     """A PMIntegrationToken row is upserted (source of truth) on connect."""
-    from meeting_notes_ai.db.models import PMIntegrationToken
-    from meeting_notes_ai.db.session import get_db_session
-
     app.dependency_overrides[get_current_user] = lambda: USER
     with TestClient(app) as client:
         with respx.mock:
@@ -169,8 +170,6 @@ def test_connect_persists_pm_integration_token_row() -> None:
                 assert row.account_email == "route@example.com"
                 assert row.account_url == JIRA_SITE
                 assert row.encrypted_credentials
-
-        import asyncio
 
         asyncio.run(_check())
     app.dependency_overrides.clear()
@@ -216,7 +215,244 @@ def test_connect_persists_token_then_queue_succeeds_without_409(client: TestClie
 
         queued = client.post(
             f"/api/v1/workspace/actions/{action['id']}/queue",
-            json={"destination": "Jira"},
+            json={"destination": "Jira", "confirmed": True},
         )
     assert queued.status_code == 200, queued.text
     assert queued.json()["sync_state"] == "task-synced"
+
+
+# ── Health endpoint tests ─────────────────────────────────────────────────────
+
+
+async def _insert_token(
+    *,
+    user_id: str = USER["user_id"],
+    provider: str = "jira",
+    is_active: bool = True,
+    token_expires_at: datetime | None = None,
+    disconnected_at: datetime | None = None,
+    account_email: str = "route@example.com",
+) -> None:
+    """Insert a PMIntegrationToken row directly into the test DB.
+
+    Deletes any existing row for (user_id, provider) first to avoid
+    UNIQUE constraint conflicts from prior tests.
+    """
+    factory = get_db_session.__globals__["_session_factory"]
+    async with factory() as session:
+        await session.execute(
+            sql_delete(PMIntegrationToken).where(
+                PMIntegrationToken.user_id == user_id,
+                PMIntegrationToken.provider == provider,
+            )
+        )
+        await session.flush()
+        token = PMIntegrationToken(
+            user_id=user_id,
+            provider=provider,
+            encrypted_credentials="dGVzdA==",
+            account_email=account_email,
+            account_url=JIRA_SITE,
+            token_expires_at=token_expires_at,
+            is_active=is_active,
+            disconnected_at=disconnected_at,
+        )
+        session.add(token)
+        await session.commit()
+
+
+async def _delete_tokens(user_id: str = USER["user_id"], provider: str = "jira") -> None:
+    """Remove all PMIntegrationToken rows for the given user/provider."""
+    factory = get_db_session.__globals__["_session_factory"]
+    async with factory() as session:
+        await session.execute(
+            sql_delete(PMIntegrationToken).where(
+                PMIntegrationToken.user_id == user_id,
+                PMIntegrationToken.provider == provider,
+            )
+        )
+        await session.commit()
+
+
+def test_integration_health_connected_returns_green(client: TestClient) -> None:
+    """Mock valid token expiring far in the future -> status 'healthy'."""
+    future = datetime.now(timezone.utc) + timedelta(hours=48)
+    asyncio.run(_insert_token(token_expires_at=future, is_active=True))
+
+    resp = client.get("/api/v1/workspace/integrations/Jira/health")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "healthy"
+    assert body["provider"] == "jira"
+    assert body["token_expires_at"] is not None
+
+    asyncio.run(_delete_tokens())
+
+
+def test_integration_health_expiring_returns_yellow(client: TestClient) -> None:
+    """Mock token expiring in 12h -> status 'expiring_soon'."""
+    soon = datetime.now(timezone.utc) + timedelta(hours=12)
+    asyncio.run(_insert_token(token_expires_at=soon, is_active=True))
+
+    resp = client.get("/api/v1/workspace/integrations/Jira/health")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "expiring_soon"
+    assert body["provider"] == "jira"
+
+    asyncio.run(_delete_tokens())
+
+
+def test_integration_health_expired_returns_red(client: TestClient) -> None:
+    """Mock expired token -> status 'needs_reauth'."""
+    past = datetime.now(timezone.utc) - timedelta(hours=2)
+    asyncio.run(_insert_token(token_expires_at=past, is_active=True))
+
+    resp = client.get("/api/v1/workspace/integrations/Jira/health")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "needs_reauth"
+    assert body["provider"] == "jira"
+
+    asyncio.run(_delete_tokens())
+
+
+def test_integration_health_not_found_returns_404(client: TestClient) -> None:
+    """Unknown provider name -> 404."""
+    resp = client.get("/api/v1/workspace/integrations/UnknownTool/health")
+    assert resp.status_code == 404
+
+
+# ── Review-before-push preview / confirmation tests ───────────────────────────
+
+
+def test_queue_action_rejects_unconfirmed_returns_preview(client: TestClient) -> None:
+    """POST queue without confirmed=true -> 409 with preview data."""
+    action = _create_meeting_with_action(client)
+    with respx.mock:
+        respx.get(f"{JIRA_SITE}/rest/api/3/myself").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "accountId": "route-123",
+                    "emailAddress": "route@example.com",
+                    "displayName": "Route User",
+                    "active": True,
+                },
+            )
+        )
+        connected = client.post(
+            "/api/v1/workspace/integrations/Jira/connect",
+            json={
+                "credentials": {
+                    "token": "route-oauth-token",
+                    "site_url": JIRA_SITE,
+                    "email": "route@example.com",
+                    "default_project": "ACME",
+                }
+            },
+        )
+        assert connected.status_code == 200, connected.text
+
+        # Queue WITHOUT confirmed=true
+        queued = client.post(
+            f"/api/v1/workspace/actions/{action['id']}/queue",
+            json={"destination": "Jira"},
+        )
+    assert queued.status_code == 409
+    body = queued.json()["detail"]
+    assert body["message"] == "Confirm action to proceed"
+    preview = body["preview"]
+    assert "title" in preview
+    assert "description" in preview
+    assert "assignee" in preview
+    assert "priority" in preview
+    assert preview["destination"] == "jira"
+
+
+def test_queue_action_confirmed_succeeds(client: TestClient) -> None:
+    """POST queue with confirmed=true -> 200 with sync result."""
+    action = _create_meeting_with_action(client)
+    with respx.mock:
+        respx.get(f"{JIRA_SITE}/rest/api/3/myself").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "accountId": "route-123",
+                    "emailAddress": "route@example.com",
+                    "displayName": "Route User",
+                    "active": True,
+                },
+            )
+        )
+        respx.post(f"{JIRA_SITE}/rest/api/3/issue").mock(
+            return_value=httpx.Response(
+                201,
+                json={
+                    "id": "10099",
+                    "key": "ACME-99",
+                    "self": f"{JIRA_SITE}/rest/api/3/issue/10099",
+                },
+            )
+        )
+        connected = client.post(
+            "/api/v1/workspace/integrations/Jira/connect",
+            json={
+                "credentials": {
+                    "token": "route-oauth-token",
+                    "site_url": JIRA_SITE,
+                    "email": "route@example.com",
+                    "default_project": "ACME",
+                }
+            },
+        )
+        assert connected.status_code == 200, connected.text
+
+        queued = client.post(
+            f"/api/v1/workspace/actions/{action['id']}/queue",
+            json={"destination": "Jira", "confirmed": True},
+        )
+    assert queued.status_code == 200, queued.text
+    assert queued.json()["sync_state"] == "task-synced"
+    assert queued.json()["external_id"] == "ACME-99"
+
+
+def test_preview_action_returns_mapped_fields(client: TestClient) -> None:
+    """POST preview -> 200 with correct field mapping for Jira."""
+    action = _create_meeting_with_action(client)
+    with respx.mock:
+        respx.get(f"{JIRA_SITE}/rest/api/3/myself").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "accountId": "route-123",
+                    "emailAddress": "route@example.com",
+                    "displayName": "Route User",
+                    "active": True,
+                },
+            )
+        )
+        connected = client.post(
+            "/api/v1/workspace/integrations/Jira/connect",
+            json={
+                "credentials": {
+                    "token": "route-oauth-token",
+                    "site_url": JIRA_SITE,
+                    "email": "route@example.com",
+                    "default_project": "ACME",
+                }
+            },
+        )
+        assert connected.status_code == 200, connected.text
+
+        resp = client.post(
+            f"/api/v1/workspace/actions/{action['id']}/preview",
+            json={"destination": "Jira"},
+        )
+    assert resp.status_code == 200, resp.text
+    preview = resp.json()
+    assert preview["destination"] == "jira"
+    assert preview["title"] == action["title"]
+    assert "description" in preview
+    assert preview["priority"] in ("High", "Medium", "Low")
+    assert preview["project"] == "ACME"

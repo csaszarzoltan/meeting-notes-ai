@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { workspaceRequest } from '../api/workspace';
 import { getCalendarStatus, disconnectCalendar, getAuthUrl } from '../api/googleCalendar';
 
@@ -9,6 +9,15 @@ interface IntegrationState {
   account_email?: string;
   account_url?: string;
   token_expires_at?: string | null;
+}
+
+interface HealthState {
+  status: 'healthy' | 'expiring_soon' | 'needs_reauth' | 'disconnected';
+  token_expires_at: string | null;
+  last_sync: string | null;
+  error_count: number;
+  provider: string;
+  account_email: string;
 }
 
 interface CredentialField {
@@ -43,19 +52,60 @@ const CREDENTIAL_FIELDS: Record<string, CredentialField[]> = {
   ],
 };
 
+/** Status dot color mapping. */
+const STATUS_COLORS: Record<string, string> = {
+  healthy: '#22c55e',
+  expiring_soon: '#eab308',
+  needs_reauth: '#ef4444',
+  disconnected: '#ef4444',
+};
+
+/** Format ISO timestamp to human-readable relative time. */
+function formatLastSync(iso: string | null): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  const now = new Date();
+  const diffMs = now.getTime() - d.getTime();
+  if (diffMs < 60_000) return 'just now';
+  if (diffMs < 3_600_000) return `${Math.floor(diffMs / 60_000)}m ago`;
+  if (diffMs < 86_400_000) return `${Math.floor(diffMs / 3_600_000)}h ago`;
+  return d.toLocaleDateString();
+}
+
 /** Persisted connector configuration catalog with PM credential connect flow. */
 export function IntegrationsCenter() {
-  const [items, setItems] = useState<Record<string, IntegrationState>>({});
+  const [items, setItems] = useState<Record<string, IntegrationState>>({})
   const [calendarConnected, setCalendarConnected] = useState(false);
   const [formOpen, setFormOpen] = useState<string | null>(null);
   const [creds, setCreds] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState<string | null>(null);
   const [error, setError] = useState('');
+  const [healthMap, setHealthMap] = useState<Record<string, HealthState>>({});
 
   const load = () =>
     workspaceRequest<{ items: Record<string, IntegrationState> }>('/integrations')
       .then((b) => setItems(b.items))
       .catch((e: Error) => setError(e.message));
+
+  /** Fetch health status for all PM integrations. */
+  const loadHealth = useCallback(async (integrations: Record<string, IntegrationState>) => {
+    const entries = Object.entries(integrations);
+    const results: Record<string, HealthState> = {};
+    await Promise.allSettled(
+      entries.map(async ([name, state]) => {
+        if (!state.provider) return;
+        try {
+          const h = await workspaceRequest<HealthState>(
+            `/integrations/${encodeURIComponent(name)}/health`
+          );
+          results[name] = h;
+        } catch {
+          // Health endpoint not available or 404 — skip
+        }
+      })
+    );
+    setHealthMap(results);
+  }, []);
 
   useEffect(() => {
     void load();
@@ -63,6 +113,19 @@ export function IntegrationsCenter() {
       .then((b) => setCalendarConnected(b.connected))
       .catch(() => setCalendarConnected(false));
   }, []);
+
+  /** Reload integrations + health after connect/disconnect. */
+  const reloadAll = useCallback(async () => {
+    const resp = await workspaceRequest<{ items: Record<string, IntegrationState> }>('/integrations');
+    setItems(resp.items);
+    await loadHealth(resp.items);
+  }, [loadHealth]);
+
+  useEffect(() => {
+    if (Object.keys(items).length > 0) {
+      void loadHealth(items);
+    }
+  }, [items, loadHealth]);
 
   const openForm = (name: string) => {
     setFormOpen(name);
@@ -79,7 +142,7 @@ export function IntegrationsCenter() {
         body: JSON.stringify({ credentials: creds }),
       });
       setFormOpen(null);
-      await load();
+      await reloadAll();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Connection failed');
     } finally {
@@ -94,7 +157,7 @@ export function IntegrationsCenter() {
         method: 'POST',
         body: JSON.stringify({ enabled }),
       });
-      await load();
+      await reloadAll();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Request failed');
     }
@@ -145,6 +208,10 @@ export function IntegrationsCenter() {
         {Object.entries(items).map(([name, state]) => {
           const provider = state.provider ?? '';
           const isPm = provider in CREDENTIAL_FIELDS;
+          const health = healthMap[name];
+          const statusColor = health ? STATUS_COLORS[health.status] ?? '#94a3b8' : '#94a3b8';
+          const lastSyncText = health ? formatLastSync(health.last_sync) : null;
+
           if (!isPm) {
             // Legacy connector: plain toggle
             return (
@@ -163,17 +230,38 @@ export function IntegrationsCenter() {
               </article>
             );
           }
-          // PM provider: form-backed connect
+          // PM provider: form-backed connect with health indicators
           return (
             <article className="integration-card" key={name}>
               <span className="integration-logo">{name[0]}</span>
               <div>
-                <h3>{name}</h3>
+                <h3>
+                  {name}
+                  {state.connected && health && (
+                    <span
+                      title={`Status: ${health.status}`}
+                      style={{
+                        display: 'inline-block',
+                        width: 8,
+                        height: 8,
+                        borderRadius: '50%',
+                        backgroundColor: statusColor,
+                        marginLeft: 8,
+                        verticalAlign: 'middle',
+                      }}
+                    />
+                  )}
+                </h3>
                 <p>
                   {state.connected
                     ? `Connected · ${state.account_email ?? ''}${state.account_url ? ` · ${state.account_url}` : ''}`
                     : 'Connect with API credentials'}
                 </p>
+                {state.connected && lastSyncText && (
+                  <p style={{ fontSize: '0.8em', color: 'var(--text-muted, #888)', margin: '2px 0 0' }}>
+                    Last sync: {lastSyncText}
+                  </p>
+                )}
                 {state.connected && state.account_url ? (
                   <a href={state.account_url} target="_blank" rel="noreferrer">
                     Open {name}
@@ -181,9 +269,29 @@ export function IntegrationsCenter() {
                 ) : null}
               </div>
               {state.connected ? (
-                <button className="secondary" onClick={() => void toggle(name, false)}>
-                  Disconnect
-                </button>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-end' }}>
+                  {health?.status === 'needs_reauth' && (
+                    <button
+                      className="primary"
+                      onClick={() => openForm(name)}
+                      style={{ fontSize: '0.85em' }}
+                    >
+                      Re-authorize
+                    </button>
+                  )}
+                  {health?.status === 'expiring_soon' && (
+                    <button
+                      className="secondary"
+                      onClick={() => openForm(name)}
+                      style={{ fontSize: '0.85em' }}
+                    >
+                      Renew token
+                    </button>
+                  )}
+                  <button className="secondary" onClick={() => void toggle(name, false)}>
+                    Disconnect
+                  </button>
+                </div>
               ) : formOpen === name ? (
                 <button className="primary" disabled={saving === name} onClick={() => void connect(name)}>
                   {saving === name ? 'Connecting…' : 'Save connection'}
