@@ -15,6 +15,16 @@ interface WorkAction {
   sync_state?: string;
 }
 
+interface PreviewData {
+  title: string;
+  description: string;
+  assignee: string;
+  priority: string;
+  due: string;
+  project: string;
+  destination: string;
+}
+
 const FILTERS = [
   'Assigned to me',
   'Unassigned',
@@ -32,6 +42,9 @@ export function ActionCenter() {
   const [filter, setFilter] = useState('Assigned to me');
   const [error, setError] = useState('');
   const [syncingId, setSyncingId] = useState<string | null>(null);
+  const [previewData, setPreviewData] = useState<PreviewData | null>(null);
+  const [previewActionId, setPreviewActionId] = useState<string | null>(null);
+  const [editingFields, setEditingFields] = useState<Partial<PreviewData>>({});
 
   const load = () =>
     workspaceRequest<{ items: WorkAction[] }>('/actions')
@@ -83,7 +96,7 @@ export function ActionCenter() {
     try {
       const updated = await workspaceRequest<WorkAction>(`/actions/${i.id}/queue`, {
         method: 'POST',
-        body: JSON.stringify({ destination: i.destination }),
+        body: JSON.stringify({ destination: i.destination, confirmed: true }),
       });
       setItems((prev) => prev.map((a) => (a.id === i.id ? updated : a)));
     } catch (e: unknown) {
@@ -92,6 +105,65 @@ export function ActionCenter() {
     } finally {
       setSyncingId(null);
     }
+  };
+
+  const requestPreview = async (i: WorkAction) => {
+    setSyncingId(i.id);
+    setError('');
+    try {
+      // Attempt queue without confirmed to get preview via 409
+      const resp = await workspaceRequest<{ detail: { preview: PreviewData; message: string } }>(
+        `/actions/${i.id}/queue`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ destination: i.destination }),
+        },
+      );
+      // If somehow succeeds without preview, just sync
+      setItems((prev) => prev.map((a) => (a.id === i.id ? resp as unknown as WorkAction : a)));
+    } catch (e: unknown) {
+      // Check if it's a 409 with preview data
+      const err = e as { message?: string; status?: number; data?: { preview?: PreviewData } };
+      if (err.data?.preview) {
+        setPreviewData(err.data.preview);
+        setPreviewActionId(i.id);
+        setEditingFields(err.data.preview);
+      } else {
+        setError(err.message || 'Failed to get preview');
+      }
+    } finally {
+      setSyncingId(null);
+    }
+  };
+
+  const confirmPush = async () => {
+    if (!previewActionId || !previewData) return;
+    setSyncingId(previewActionId);
+    setError('');
+    try {
+      const updated = await workspaceRequest<WorkAction>(`/actions/${previewActionId}/queue`, {
+        method: 'POST',
+        body: JSON.stringify({
+          destination: editingFields.destination || previewData.destination,
+          confirmed: true,
+        }),
+      });
+      setItems((prev) => prev.map((a) => (a.id === previewActionId ? updated : a)));
+      setPreviewData(null);
+      setPreviewActionId(null);
+      setEditingFields({});
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Sync failed';
+      setError(msg);
+    } finally {
+      setSyncingId(null);
+    }
+  };
+
+  const cancelPreview = () => {
+    setPreviewData(null);
+    setPreviewActionId(null);
+    setEditingFields({});
   };
 
   const setDestination = (i: WorkAction, destination: string) => {
@@ -116,12 +188,75 @@ export function ActionCenter() {
             <button
               className="text-button"
               style={{ padding: 0 }}
-              onClick={() => {
-                /* retry last sync — find first syncing or just dismiss */
-                setError('');
-              }}
+              onClick={() => setError('')}
             >
               Try again
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Preview / Confirmation Card */}
+      {previewData && (
+        <div className="preview-card" style={{ border: '2px solid #3b82f6', borderRadius: 8, padding: 16, marginBottom: 16, background: '#f0f7ff' }}>
+          <h3 style={{ margin: '0 0 12px' }}>Preview: Sync to {previewData.destination}</h3>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+            <label>
+              Title
+              <input
+                value={editingFields.title ?? previewData.title}
+                onChange={(e) => setEditingFields((p) => ({ ...p, title: e.target.value }))}
+                style={{ width: '100%', marginTop: 2 }}
+              />
+            </label>
+            <label>
+              Assignee
+              <input
+                value={editingFields.assignee ?? previewData.assignee}
+                onChange={(e) => setEditingFields((p) => ({ ...p, assignee: e.target.value }))}
+                style={{ width: '100%', marginTop: 2 }}
+              />
+            </label>
+            <label>
+              Priority
+              <select
+                value={editingFields.priority ?? previewData.priority}
+                onChange={(e) => setEditingFields((p) => ({ ...p, priority: e.target.value }))}
+                style={{ width: '100%', marginTop: 2 }}
+              >
+                <option value="Low">Low</option>
+                <option value="Medium">Medium</option>
+                <option value="High">High</option>
+              </select>
+            </label>
+            <label>
+              Project
+              <input
+                value={editingFields.project ?? previewData.project}
+                onChange={(e) => setEditingFields((p) => ({ ...p, project: e.target.value }))}
+                style={{ width: '100%', marginTop: 2 }}
+              />
+            </label>
+            <label style={{ gridColumn: '1 / -1' }}>
+              Description
+              <textarea
+                value={editingFields.description ?? previewData.description}
+                onChange={(e) => setEditingFields((p) => ({ ...p, description: e.target.value }))}
+                rows={3}
+                style={{ width: '100%', marginTop: 2 }}
+              />
+            </label>
+          </div>
+          <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
+            <button
+              className="primary"
+              disabled={syncingId === previewActionId}
+              onClick={() => void confirmPush()}
+            >
+              {syncingId === previewActionId ? 'Syncing…' : 'Confirm & Push'}
+            </button>
+            <button className="secondary" onClick={cancelPreview}>
+              Cancel
             </button>
           </div>
         </div>
@@ -176,9 +311,9 @@ export function ActionCenter() {
                   <button
                     className="primary compact"
                     disabled={syncingId === i.id || i.destination === 'Not selected'}
-                    onClick={() => void sync(i)}
+                    onClick={() => void requestPreview(i)}
                   >
-                    {syncingId === i.id ? 'Syncing…' : 'Sync'}
+                    {syncingId === i.id ? 'Loading preview…' : 'Sync'}
                   </button>
                 </>
               ) : i.status === 'suggested' ? (
@@ -201,10 +336,10 @@ export function ActionCenter() {
                 <button
                   className="secondary"
                   disabled={syncingId === i.id}
-                  onClick={() => void sync(i)}
+                  onClick={() => void requestPreview(i)}
                 >
                   {syncingId === i.id
-                    ? 'Syncing…'
+                    ? 'Loading preview…'
                     : `Sync to ${i.destination || 'provider'}`}
                 </button>
               )}
