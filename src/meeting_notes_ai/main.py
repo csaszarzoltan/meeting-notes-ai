@@ -73,9 +73,20 @@ async def lifespan(app: FastAPI):
             "retention sweep scheduled every %s seconds",
             settings.retention_sweep_interval_seconds,
         )
+
+    from meeting_notes_ai.workers.token_refresh import run_token_refresh_loop
+
+    token_refresh_task = asyncio.create_task(run_token_refresh_loop())
+    logger.info("token_refresh worker scheduled")
+
     try:
         yield
     finally:
+        token_refresh_task.cancel()
+        try:
+            await token_refresh_task
+        except asyncio.CancelledError:
+            pass
         if sweep_task is not None:
             sweep_task.cancel()
             try:

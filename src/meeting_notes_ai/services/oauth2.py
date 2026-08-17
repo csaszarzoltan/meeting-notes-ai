@@ -358,7 +358,7 @@ async def handle_callback(
         provider=provider,
         token=access_token,
         email=email,
-        account_url=account_url,
+        site_url=account_url,
     )
 
 
