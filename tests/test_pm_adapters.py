@@ -13,7 +13,9 @@ Run: .venv/bin/python -m pytest tests/test_pm_adapters.py -v
 
 from __future__ import annotations
 
+import asyncio
 import inspect
+import unittest.mock
 from dataclasses import is_dataclass
 from typing import Any
 
@@ -824,3 +826,91 @@ class TestTodoistAdapterBehavior:
         assert isinstance(result, AdapterTaskResult)
         assert result.external_id == "todoist-task-123"
         assert "todoist.com" in result.external_url
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PART 3: Rate limiter throttle tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestAdapterThrottleInterface:
+    """Verify Adapter base class exposes _throttle and _rate_limiter."""
+
+    def test_adapter_has_rate_limiter_class_var(self):
+        from meeting_notes_ai.ratelimit import TokenBucketRateLimiter
+        assert hasattr(Adapter, "_rate_limiter")
+        assert isinstance(Adapter._rate_limiter, TokenBucketRateLimiter)
+
+    def test_adapter_has_throttle_method(self):
+        assert hasattr(Adapter, "_throttle")
+        assert asyncio.iscoroutinefunction(Adapter._throttle)
+
+    def test_adapter_throttle_method_signature(self):
+        sig = inspect.signature(Adapter._throttle)
+        params = list(sig.parameters.keys())
+        assert "self" in params
+        assert "key" in params
+        assert sig.parameters["key"].default is None
+
+
+class TestAdapterThrottleBehavior:
+    """Behavioral tests for _throttle — verify it blocks when bucket is empty."""
+
+    def test_throttle_allows_normal_rate(self):
+        """Request passes through when bucket has tokens."""
+        import asyncio
+        from meeting_notes_ai.ratelimit import TokenBucketRateLimiter
+
+        adapter = JiraAdapter()
+        # Fill the bucket with plenty of tokens
+        adapter._rate_limiter = TokenBucketRateLimiter(capacity=10, fill_rate=100.0)
+
+        # Throttle should return immediately (no sleep)
+        async def _run():
+            with unittest.mock.patch("asyncio.sleep") as mock_sleep:
+                await adapter._throttle("jira")
+                mock_sleep.assert_not_called()
+
+        asyncio.run(_run())
+
+    def test_throttle_blocks_excess(self):
+        """When bucket is empty, _throttle sleeps until a token is available."""
+        import asyncio
+
+        adapter = JiraAdapter()
+
+        async def _run():
+            # Mock allow: False first call (rate limited), True after sleep
+            with unittest.mock.patch.object(
+                adapter._rate_limiter, "allow", side_effect=[False, True]
+            ):
+                with unittest.mock.patch.object(
+                    adapter._rate_limiter, "retry_after", return_value=5
+                ):
+                    with unittest.mock.patch("asyncio.sleep") as mock_sleep:
+                        mock_sleep.return_value = None
+                        await adapter._throttle("jira")
+                        mock_sleep.assert_called_once()
+                        assert mock_sleep.call_args[0][0] == 5
+
+        asyncio.run(_run())
+
+    def test_throttle_per_provider_config(self):
+        """Each provider has the correct capacity and fill_rate."""
+        from meeting_notes_ai.ratelimit import TokenBucketRateLimiter
+
+        # Jira: capacity=100, fill_rate=100/300
+        assert JiraAdapter._rate_limiter.capacity == 100
+        assert JiraAdapter._rate_limiter.fill_rate == pytest.approx(100 / 300)
+
+        # Linear: capacity=100, fill_rate=100/3600
+        assert LinearAdapter._rate_limiter.capacity == 100
+        assert LinearAdapter._rate_limiter.fill_rate == pytest.approx(100 / 3600)
+
+        # Asana: capacity=150, fill_rate=150/60
+        assert AsanaAdapter._rate_limiter.capacity == 150
+        assert AsanaAdapter._rate_limiter.fill_rate == pytest.approx(150 / 60)
+
+        # Todoist: capacity=100, fill_rate=100/900
+        assert TodoistAdapter._rate_limiter.capacity == 100
+        assert TodoistAdapter._rate_limiter.fill_rate == pytest.approx(100 / 900)

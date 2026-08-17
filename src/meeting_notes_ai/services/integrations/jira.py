@@ -6,6 +6,7 @@ from typing import Any
 
 import httpx
 
+from meeting_notes_ai.ratelimit import TokenBucketRateLimiter
 from meeting_notes_ai.services.http_client import get_http_client
 from meeting_notes_ai.services.integrations.base import (
     Adapter,
@@ -40,6 +41,9 @@ class JiraAdapter(Adapter):
     provider = "jira"
     display_name = "Jira"
     auth_type = "oauth2"
+    _rate_limiter = TokenBucketRateLimiter(
+        capacity=100, fill_rate=100 / 300  # points-based, conservative
+    )
 
     # Transient auth state set by the route layer between connect() and
     # create_task().  Adapters are effectively stateless — the route layer
@@ -57,6 +61,7 @@ class JiraAdapter(Adapter):
 
     async def connect(self, auth: AdapterAuth) -> AdapterConnection:
         """Validate credentials by calling /rest/api/3/myself."""
+        await self._throttle()
         site_url = auth.site_url.rstrip("/")
         if not site_url:
             raise AdapterValidationError("site_url is required for Jira connections.")
@@ -92,6 +97,7 @@ class JiraAdapter(Adapter):
         idempotency_key: str | None = None,
     ) -> AdapterTaskResult:
         """Create a Jira issue from a workspace action item."""
+        await self._throttle()
         auth = self._resolve_auth(action)
         site_url = auth.site_url.rstrip("/")
         proj_key = project or auth.default_project

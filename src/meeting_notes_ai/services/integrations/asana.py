@@ -6,6 +6,7 @@ from typing import Any
 
 import httpx
 
+from meeting_notes_ai.ratelimit import TokenBucketRateLimiter
 from meeting_notes_ai.services.http_client import get_http_client
 from meeting_notes_ai.services.integrations.base import (
     Adapter,
@@ -41,6 +42,9 @@ class AsanaAdapter(Adapter):
     provider = "asana"
     display_name = "Asana"
     auth_type = "pat"
+    _rate_limiter = TokenBucketRateLimiter(
+        capacity=150, fill_rate=150 / 60  # 1500 calls/min
+    )
 
     _auth: AdapterAuth | None = None
 
@@ -51,6 +55,7 @@ class AsanaAdapter(Adapter):
 
     async def connect(self, auth: AdapterAuth) -> AdapterConnection:
         """Validate PAT and fetch user profile + first workspace."""
+        await self._throttle()
         resp: httpx.Response | None = None
         async with get_http_client() as client:
             try:
@@ -101,6 +106,7 @@ class AsanaAdapter(Adapter):
         idempotency_key: str | None = None,
     ) -> AdapterTaskResult:
         """Create an Asana task."""
+        await self._throttle()
         auth = self._resolve_auth(action)
         workspace_gid = auth.default_project
         if not workspace_gid:

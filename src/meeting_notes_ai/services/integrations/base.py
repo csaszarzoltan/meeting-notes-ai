@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
+
+from meeting_notes_ai.ratelimit import TokenBucketRateLimiter
 
 
 @dataclass(frozen=True)
@@ -74,6 +77,15 @@ class Adapter(ABC):
     display_name: ClassVar[str]        # "Jira" | "Linear" | "Asana" | "Todoist"
     auth_type: ClassVar[str]           # "oauth2" | "api_key" | "pat" | "rest_token"
     connect_timeout: ClassVar[float] = 15.0
+    _rate_limiter: ClassVar[TokenBucketRateLimiter] = TokenBucketRateLimiter(
+        capacity=100, fill_rate=100 / 86_400  # default; overridden per provider
+    )
+
+    async def _throttle(self, key: str | None = None) -> None:
+        """Wait if rate-limited. key defaults to provider name."""
+        k = key or self.provider
+        while not self._rate_limiter.allow(k):
+            await asyncio.sleep(self._rate_limiter.retry_after(k))
 
     @abstractmethod
     async def connect(self, auth: AdapterAuth) -> AdapterConnection:

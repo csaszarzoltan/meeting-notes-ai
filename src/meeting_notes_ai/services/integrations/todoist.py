@@ -6,6 +6,7 @@ from typing import Any
 
 import httpx
 
+from meeting_notes_ai.ratelimit import TokenBucketRateLimiter
 from meeting_notes_ai.services.http_client import get_http_client
 from meeting_notes_ai.services.integrations.base import (
     Adapter,
@@ -41,6 +42,9 @@ class TodoistAdapter(Adapter):
     provider = "todoist"
     display_name = "Todoist"
     auth_type = "rest_token"
+    _rate_limiter = TokenBucketRateLimiter(
+        capacity=100, fill_rate=100 / 900  # 1000 req/15min
+    )
 
     _auth: AdapterAuth | None = None
 
@@ -51,6 +55,7 @@ class TodoistAdapter(Adapter):
 
     async def connect(self, auth: AdapterAuth) -> AdapterConnection:
         """Validate token by fetching projects."""
+        await self._throttle()
         resp: httpx.Response | None = None
         async with get_http_client() as client:
             try:
@@ -81,6 +86,7 @@ class TodoistAdapter(Adapter):
         idempotency_key: str | None = None,
     ) -> AdapterTaskResult:
         """Create a Todoist task."""
+        await self._throttle()
         auth = self._resolve_auth(action)
 
         task_body: dict[str, Any] = {

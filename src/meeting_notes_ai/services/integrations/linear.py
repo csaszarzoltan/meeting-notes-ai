@@ -6,6 +6,7 @@ from typing import Any
 
 import httpx
 
+from meeting_notes_ai.ratelimit import TokenBucketRateLimiter
 from meeting_notes_ai.services.http_client import get_http_client
 from meeting_notes_ai.services.integrations.base import (
     Adapter,
@@ -91,6 +92,9 @@ class LinearAdapter(Adapter):
     provider = "linear"
     display_name = "Linear"
     auth_type = "api_key"
+    _rate_limiter = TokenBucketRateLimiter(
+        capacity=100, fill_rate=100 / 3600  # 600 req/hr
+    )
 
     _auth: AdapterAuth | None = None
 
@@ -101,6 +105,7 @@ class LinearAdapter(Adapter):
 
     async def connect(self, auth: AdapterAuth) -> AdapterConnection:
         """Validate credentials by querying the viewer."""
+        await self._throttle()
         resp: httpx.Response | None = None
         async with get_http_client() as client:
             try:
@@ -146,6 +151,7 @@ class LinearAdapter(Adapter):
         idempotency_key: str | None = None,
     ) -> AdapterTaskResult:
         """Create a Linear issue via GraphQL mutation."""
+        await self._throttle()
         auth = self._resolve_auth(action)
         team_id = project or auth.default_project
         if not team_id:
